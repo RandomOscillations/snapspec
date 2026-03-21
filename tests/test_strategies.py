@@ -1,0 +1,230 @@
+"""
+Tests for coordination strategies using a mock coordinator.
+
+These test the strategy logic in isolation — no real networking or block stores.
+The mock coordinator simulates node responses to verify strategy control flow.
+"""
+
+import asyncio
+import pytest
+from dataclasses import dataclass, field
+from typing import Any
+
+from snapspec.coordinator.strategy_interface import SnapshotResult
+
+
+@dataclass
+class MockCoordinator:
+    """Mock coordinator that simulates node responses for strategy testing."""
+
+    speculative_max_retries: int = 5
+    validation_timeout_s: float = 1.0
+    delta_size_threshold_frac: float = 0.10
+    _clock: int = 0
+    _responses: dict[str, list[dict]] = field(default_factory=dict)
+    _write_logs: list[list[dict]] = field(default_factory=list)
+    _call_log: list[tuple[str, int]] = field(default_factory=list)
+
+    def tick(self) -> int:
+        self._clock += 1
+        return self._clock
+
+    def set_response(self, msg_type: str, responses: list[dict]):
+        """Configure what nodes will respond to a given message type."""
+        self._responses[msg_type] = responses
+
+    def set_write_logs(self, logs: list[list[dict]]):
+        """Configure write logs that collect_write_logs_parallel will return."""
+        self._write_logs = logs
+
+    async def send_all(self, msg_type: str, ts: int, **kwargs) -> list[dict]:
+        self._call_log.append((msg_type, ts))
+        return self._responses.get(msg_type, [{}])
+
+    async def collect_write_logs_parallel(self, ts: int) -> list[list[dict]]:
+        self._call_log.append(("GET_WRITE_LOG", ts))
+        return self._write_logs
+
+    def was_called(self, msg_type: str) -> bool:
+        return any(t == msg_type for t, _ in self._call_log)
+
+    def call_count(self, msg_type: str) -> int:
+        return sum(1 for t, _ in self._call_log if t == msg_type)
+
+
+def _entry(tag: int, role: str):
+    return {"dependency_tag": tag, "role": role, "block_id": 0,
+            "timestamp": 1, "partner_node_id": 0}
+
+
+# ---- Pause-and-Snap Tests ----
+
+class TestPauseAndSnap:
+    @pytest.fixture
+    def coord(self):
+        c = MockCoordinator()
+        c.set_response("PAUSE", [{"type": "PAUSED"}, {"type": "PAUSED"}])
+        c.set_response("SNAP_NOW", [{"type": "SNAPPED"}, {"type": "SNAPPED"}])
+        c.set_response("COMMIT", [{"type": "ACK"}, {"type": "ACK"}])
+        c.set_response("RESUME", [{"type": "ACK"}, {"type": "ACK"}])
+        return c
+
+    @pytest.mark.asyncio
+    async def test_happy_path(self, coord):
+        from snapspec.coordinator.pause_and_snap import execute
+        result = await execute(coord, ts=1)
+        assert result.success
+        assert coord.was_called("PAUSE")
+        assert coord.was_called("SNAP_NOW")
+        assert coord.was_called("COMMIT")
+        assert coord.was_called("RESUME")
+
+    @pytest.mark.asyncio
+    async def test_pause_failure_aborts(self, coord):
+        from snapspec.coordinator.pause_and_snap import execute
+        coord.set_response("PAUSE", [{"type": "PAUSED"}, {"type": "ERROR"}])
+        result = await execute(coord, ts=1)
+        assert not result.success
+        assert coord.was_called("RESUME")
+        assert not coord.was_called("COMMIT")
+
+    @pytest.mark.asyncio
+    async def test_snap_failure_resumes(self, coord):
+        from snapspec.coordinator.pause_and_snap import execute
+        coord.set_response("SNAP_NOW", [{"type": "SNAPPED"}, {"type": "ERROR"}])
+        result = await execute(coord, ts=1)
+        assert not result.success
+        assert coord.was_called("RESUME")
+
+
+# ---- Two-Phase Tests ----
+
+class TestTwoPhase:
+    @pytest.fixture
+    def coord(self):
+        c = MockCoordinator()
+        c.set_response("PREPARE", [{"type": "READY"}, {"type": "READY"}])
+        c.set_response("COMMIT", [{"type": "ACK"}, {"type": "ACK"}])
+        c.set_response("ABORT", [{"type": "ACK"}, {"type": "ACK"}])
+        c.set_write_logs([[], []])  # empty logs = consistent
+        return c
+
+    @pytest.mark.asyncio
+    async def test_consistent_commits(self, coord):
+        from snapspec.coordinator.two_phase import execute
+        result = await execute(coord, ts=1)
+        assert result.success
+        assert coord.was_called("PREPARE")
+        assert coord.was_called("COMMIT")
+        assert not coord.was_called("ABORT")
+
+    @pytest.mark.asyncio
+    async def test_inconsistent_aborts(self, coord):
+        from snapspec.coordinator.two_phase import execute
+        # Only CAUSE in log → inconsistent
+        coord.set_write_logs([
+            [_entry(tag=1, role="CAUSE")],
+            [],
+        ])
+        result = await execute(coord, ts=1)
+        assert not result.success
+        assert coord.was_called("ABORT")
+        assert not coord.was_called("COMMIT")
+
+    @pytest.mark.asyncio
+    async def test_prepare_failure_aborts(self, coord):
+        from snapspec.coordinator.two_phase import execute
+        coord.set_response("PREPARE", [{"type": "READY"}, {"type": "ERROR"}])
+        result = await execute(coord, ts=1)
+        assert not result.success
+        assert coord.was_called("ABORT")
+
+
+# ---- Speculative Tests ----
+
+class TestSpeculative:
+    @pytest.fixture
+    def coord(self):
+        c = MockCoordinator()
+        c.speculative_max_retries = 3
+        c.validation_timeout_s = 1.0
+        c.set_response("SNAP_NOW", [{"type": "SNAPPED"}, {"type": "SNAPPED"}])
+        c.set_response("COMMIT", [{"type": "ACK"}, {"type": "ACK"}])
+        c.set_response("ABORT", [{"type": "ACK", "delta_blocks": 5}, {"type": "ACK", "delta_blocks": 3}])
+        # For two-phase fallback
+        c.set_response("PREPARE", [{"type": "READY"}, {"type": "READY"}])
+        c.set_write_logs([[], []])
+        return c
+
+    @pytest.mark.asyncio
+    async def test_first_attempt_success(self, coord):
+        from snapspec.coordinator.speculative import execute
+        result = await execute(coord, ts=1)
+        assert result.success
+        assert result.retries == 0
+        assert coord.call_count("SNAP_NOW") == 1
+
+    @pytest.mark.asyncio
+    async def test_retries_then_succeeds(self, coord):
+        from snapspec.coordinator.speculative import execute
+
+        call_count = [0]
+        original_logs = coord._write_logs
+
+        # First 2 attempts return inconsistent logs, 3rd returns consistent
+        async def mock_collect(ts):
+            call_count[0] += 1
+            if call_count[0] <= 2:
+                return [[_entry(tag=1, role="CAUSE")], []]  # inconsistent
+            return [[], []]  # consistent
+
+        coord.collect_write_logs_parallel = mock_collect
+        result = await execute(coord, ts=1)
+        assert result.success
+        assert result.retries == 2
+
+    @pytest.mark.asyncio
+    async def test_exhausted_retries_falls_back(self, coord):
+        from snapspec.coordinator.speculative import execute
+        coord.speculative_max_retries = 2
+
+        # Always return inconsistent
+        async def always_inconsistent(ts):
+            return [[_entry(tag=1, role="CAUSE")], []]
+
+        coord.collect_write_logs_parallel = always_inconsistent
+
+        # But two-phase fallback logs are consistent
+        coord.set_write_logs([[], []])
+        # Need to restore collect for two-phase fallback
+        original_collect = None
+        call_count = [0]
+
+        async def mock_collect(ts):
+            call_count[0] += 1
+            if call_count[0] <= 3:  # speculative attempts (0,1,2)
+                return [[_entry(tag=1, role="CAUSE")], []]
+            return [[], []]  # two-phase fallback
+
+        coord.collect_write_logs_parallel = mock_collect
+        result = await execute(coord, ts=1)
+        assert result.success  # two-phase fallback succeeds
+        assert result.retries == 3  # max_retries + 1 indicates fallback
+
+    @pytest.mark.asyncio
+    async def test_delta_blocks_tracked(self, coord):
+        from snapspec.coordinator.speculative import execute
+
+        call_count = [0]
+
+        async def inconsistent_then_consistent(ts):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return [[_entry(tag=1, role="CAUSE")], []]
+            return [[], []]
+
+        coord.collect_write_logs_parallel = inconsistent_then_consistent
+        result = await execute(coord, ts=1)
+        assert result.success
+        assert result.delta_blocks_at_discard is not None
+        assert len(result.delta_blocks_at_discard) > 0
