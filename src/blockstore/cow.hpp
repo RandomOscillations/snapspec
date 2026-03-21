@@ -22,8 +22,9 @@ public:
     void init(const std::string& base_path, size_t block_size, size_t total_blocks) override;
     void read(uint64_t block_id, uint8_t* buffer) override;
     void write(uint64_t block_id, const uint8_t* data,
-               uint64_t timestamp, uint64_t dep_tag,
-               WriteLogEntry::Role role, int partner) override;
+               uint64_t timestamp = 0, uint64_t dep_tag = 0,
+               WriteLogEntry::Role role = WriteLogEntry::Role::NONE,
+               int partner = -1) override;
     void create_snapshot(uint64_t snapshot_ts) override;
     size_t discard_snapshot() override;
     void commit_snapshot(const std::string& archive_path) override;
