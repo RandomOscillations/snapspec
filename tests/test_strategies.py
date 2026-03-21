@@ -20,6 +20,7 @@ class MockCoordinator:
     speculative_max_retries: int = 5
     validation_timeout_s: float = 1.0
     delta_size_threshold_frac: float = 0.10
+    total_blocks_per_node: int = 4096
     _clock: int = 0
     _responses: dict[str, list[dict]] = field(default_factory=dict)
     _write_logs: list[list[dict]] = field(default_factory=list)

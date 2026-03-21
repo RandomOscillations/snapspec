@@ -26,6 +26,7 @@ class CoordinatorProtocol(Protocol):
     speculative_max_retries: int
     validation_timeout_s: float
     delta_size_threshold_frac: float
+    total_blocks_per_node: int
 
     def tick(self) -> int:
         """Increment and return the logical clock. Thread-safe."""

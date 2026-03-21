@@ -101,7 +101,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
 
         # FM5: If delta is too large, skip remaining retries and fall back now
         # (delta_threshold is a fraction of total image blocks)
-        if _should_fallback_early(attempt_deltas, delta_threshold):
+        if _should_fallback_early(attempt_deltas, delta_threshold, coordinator.total_blocks_per_node):
             break
 
         # Linear backoff before next retry
@@ -133,15 +133,11 @@ def _extract_delta_blocks(responses: list[dict | None]) -> list[int]:
 def _should_fallback_early(
     delta_counts: list[int],
     threshold_frac: float,
+    total_blocks_per_node: int,
 ) -> bool:
     """Check FM5: if any node's delta exceeds threshold, fall back immediately.
 
-    The coordinator needs to know total_blocks to compute the actual threshold.
-    For now, we use a heuristic: if any single abort had >1000 delta blocks,
-    that's a sign the delta is growing too fast. This should be refined once
-    Person B exposes total_blocks through the coordinator config.
+    Threshold is threshold_frac * total_blocks_per_node (e.g., 0.1 * 4096 = 409 blocks).
     """
-    # TODO: Replace hardcoded 1000 with threshold_frac * total_blocks_per_node
-    #       once coordinator config includes total_blocks.
-    fallback_limit = 1000
+    fallback_limit = int(threshold_frac * total_blocks_per_node)
     return any(d > fallback_limit for d in delta_counts)
