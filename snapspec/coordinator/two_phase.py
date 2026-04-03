@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 
 from .strategy_interface import SnapshotResult
 from ..validation.causal import validate_causal, ValidationResult
+from ..validation.conservation import validate_conservation
 
 if TYPE_CHECKING:
     from .strategy_interface import CoordinatorProtocol
@@ -51,18 +52,38 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     if not all(r is not None and r.get("type") == _READY for r in responses):
         # Some node failed to prepare — abort all
         await coordinator.send_all(_ABORT, ts)
-        return SnapshotResult(success=False)
+        return SnapshotResult(success=False, causal_consistent=False)
 
-    # Collect write logs in parallel (bounded by ts)
-    all_logs = await coordinator.collect_write_logs_parallel(ts)
+    # Collect write logs + snapshot-time balances in parallel (bounded by ts)
+    all_logs, snapshot_balances = await coordinator.collect_write_logs_and_balances_parallel(ts)
 
     # Validate causal consistency
-    result, violations = validate_causal(all_logs)
+    causal_result, violations = validate_causal(all_logs)
+    causal_ok = causal_result == ValidationResult.CONSISTENT
 
     # Phase 2: Commit or Abort
-    if result == ValidationResult.CONSISTENT:
+    if causal_ok:
         await coordinator.send_all(_COMMIT, ts)
-        return SnapshotResult(success=True)
+
+        # Conservation check (only meaningful on committed snapshots)
+        conservation_ok: bool | None = None
+        if coordinator.expected_total > 0:
+            cons = validate_conservation(
+                snapshot_balances, all_logs,
+                coordinator.transfer_amounts, coordinator.expected_total,
+            )
+            conservation_ok = cons.valid
+
+        return SnapshotResult(
+            success=True,
+            causal_consistent=True,
+            causal_violation_count=0,
+            conservation_holds=conservation_ok,
+        )
     else:
         await coordinator.send_all(_ABORT, ts)
-        return SnapshotResult(success=False)
+        return SnapshotResult(
+            success=False,
+            causal_consistent=False,
+            causal_violation_count=len(violations),
+        )

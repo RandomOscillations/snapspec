@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 
 from .strategy_interface import SnapshotResult
 from ..validation.causal import validate_causal, ValidationResult
+from ..validation.conservation import validate_conservation
 
 if TYPE_CHECKING:
     from .strategy_interface import CoordinatorProtocol
@@ -68,10 +69,10 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                 await asyncio.sleep(_BACKOFF_BASE_S * (attempt + 1))
             continue
 
-        # Step 2: Collect write logs with deadline
+        # Step 2: Collect write logs + snapshot-time balances with deadline
         try:
-            all_logs = await asyncio.wait_for(
-                coordinator.collect_write_logs_parallel(attempt_ts),
+            all_logs, snapshot_balances = await asyncio.wait_for(
+                coordinator.collect_write_logs_and_balances_parallel(attempt_ts),
                 timeout=timeout,
             )
         except asyncio.TimeoutError:
@@ -82,16 +83,29 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                 await asyncio.sleep(_BACKOFF_BASE_S * (attempt + 1))
             continue
 
-        # Step 3: Validate
+        # Step 3: Validate causal consistency
         result, violations = validate_causal(all_logs)
 
         if result == ValidationResult.CONSISTENT:
             # Step 4a: Commit
             await coordinator.send_all(_COMMIT, attempt_ts)
+
+            # Conservation check on committed snapshot
+            conservation_ok: bool | None = None
+            if coordinator.expected_total > 0:
+                cons = validate_conservation(
+                    snapshot_balances, all_logs,
+                    coordinator.transfer_amounts, coordinator.expected_total,
+                )
+                conservation_ok = cons.valid
+
             return SnapshotResult(
                 success=True,
                 retries=attempt,
                 delta_blocks_at_discard=delta_blocks_at_discard,
+                causal_consistent=True,
+                causal_violation_count=0,
+                conservation_holds=conservation_ok,
             )
 
         # Step 4b: Inconsistent — abort
@@ -118,6 +132,9 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
         success=fallback_result.success,
         retries=max_retries + 1,  # indicates fallback was used
         delta_blocks_at_discard=delta_blocks_at_discard,
+        causal_consistent=fallback_result.causal_consistent,
+        causal_violation_count=fallback_result.causal_violation_count,
+        conservation_holds=fallback_result.conservation_holds,
     )
 
 

@@ -1,0 +1,20 @@
+experiment: baseline
+config_name: fullcopy
+param_value: default
+
+num_nodes: 7
+strategy: pause_and_snap
+
+duration_s: 10
+snapshot_interval_s: 0.5
+
+write_rate: 800
+cross_node_ratio: 0.9
+
+block_store_type: fullcopy
+block_size: 4096
+total_blocks: 128
+
+total_tokens: 100000
+
+seed: 42

@@ -17,6 +17,10 @@ class SnapshotResult:
     success: bool
     retries: int = 0
     delta_blocks_at_discard: list[int] | None = None
+    # Accuracy fields — populated by each strategy
+    causal_consistent: bool | None = None       # None = not checked (e.g. trivially true)
+    causal_violation_count: int = 0
+    conservation_holds: bool | None = None      # None = conservation check not run
 
 
 class CoordinatorProtocol(Protocol):
@@ -27,6 +31,10 @@ class CoordinatorProtocol(Protocol):
     validation_timeout_s: float
     delta_size_threshold_frac: float
     total_blocks_per_node: int
+
+    # --- Accuracy validation ---
+    expected_total: int                        # 0 means conservation check disabled
+    transfer_amounts: dict[int, int]           # dep_tag -> amount, updated by workload
 
     def tick(self) -> int:
         """Increment and return the logical clock. Thread-safe."""
@@ -48,5 +56,16 @@ class CoordinatorProtocol(Protocol):
 
         Each write log entry dict has keys:
           block_id, timestamp, dependency_tag, role ("CAUSE"|"EFFECT"|"NONE"), partner_node_id
+        """
+        ...
+
+    async def collect_write_logs_and_balances_parallel(
+        self, ts: int
+    ) -> tuple[list[list[dict[str, Any]]], list[int]]:
+        """Like collect_write_logs_parallel but also returns per-node snapshot balances.
+
+        Returns:
+            (all_logs, snapshot_balances) where snapshot_balances[i] is the balance
+            node i held at the moment its snapshot was taken.
         """
         ...

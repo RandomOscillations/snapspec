@@ -64,6 +64,8 @@ def create_block_stores(config: dict) -> list:
 
     data_dir = config.get("data_dir", "/tmp/snapspec_data")
     os.makedirs(data_dir, exist_ok=True)
+    archive_dir = config.get("archive_dir", "/tmp/snapspec_archives")
+    os.makedirs(archive_dir, exist_ok=True)
 
     stores = []
     for i in range(n):
@@ -151,6 +153,10 @@ async def run_single(config: dict, rep: int, output_dir: str) -> str:
     )
     await workload.start()
 
+    # Wire accuracy validation into coordinator
+    coordinator.expected_total = total_tokens
+    coordinator.transfer_amounts = workload._transfer_amounts  # live reference
+
     # 6. Start continuous sampling
     await metrics.start_continuous_sampling(workload)
 
@@ -187,13 +193,18 @@ async def run_single(config: dict, rep: int, output_dir: str) -> str:
     metrics.write_csv(csv_path)
 
     summary = metrics.compute_summary()
+    causal_rate = summary["causal_consistency_rate"]
+    cons_rate = summary["conservation_validity_rate"]
     logger.info(
         "Run complete: %d snapshots (%d committed), "
-        "p50=%.1fms, avg throughput=%.0f w/s",
+        "p50=%.1fms, avg throughput=%.0f w/s, "
+        "causal_consistency=%.1f%%, conservation=%.1f%%",
         int(summary["snapshot_count"]),
         int(summary["snapshot_committed"]),
         summary["p50_latency_ms"],
         summary["avg_throughput_writes_sec"],
+        causal_rate * 100 if causal_rate >= 0 else float("nan"),
+        cons_rate * 100 if cons_rate >= 0 else float("nan"),
     )
 
     return csv_path

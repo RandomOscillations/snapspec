@@ -64,6 +64,10 @@ class Coordinator:
 
         self._on_snapshot_complete = on_snapshot_complete
 
+        # Accuracy validation — set by experiment harness after workload starts
+        self.expected_total: int = 0           # 0 disables conservation check
+        self.transfer_amounts: dict = {}       # live reference to workload's transfer dict
+
         # Connections: ordered list matching node_configs order
         self._connections: list[NodeConnection] = []
         # Also expose as a dict for convenience
@@ -147,6 +151,50 @@ class Coordinator:
             *[_collect_one(c) for c in self._connections]
         )
         return list(results)
+
+    async def collect_write_logs_and_balances_parallel(
+        self, ts: int
+    ) -> tuple[list[list[dict[str, Any]]], list[int]]:
+        """Collect write logs AND snapshot-time balances from all nodes in parallel.
+
+        Returns:
+            (all_logs, snapshot_balances) — all_logs[i] is node i's write log,
+            snapshot_balances[i] is the balance node i held when its snapshot was taken.
+        """
+
+        async def _collect_one(conn: NodeConnection) -> tuple[list[dict], int]:
+            try:
+                resp = await asyncio.wait_for(
+                    conn.send_and_receive(
+                        MessageType.GET_WRITE_LOG, ts, max_timestamp=ts,
+                    ),
+                    timeout=self.validation_timeout_s,
+                )
+                if resp is None:
+                    logger.warning("Node %d returned None for write log", conn.node_id)
+                    return [], 0
+                entries = resp.get("entries", [])
+                snapshot_balance = resp.get("snapshot_balance", resp.get("balance", 0))
+                return entries, snapshot_balance
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Write log collection timed out for node %d (%.1fs)",
+                    conn.node_id, self.validation_timeout_s,
+                )
+                return [], 0
+            except Exception as e:
+                logger.error(
+                    "Write log collection failed for node %d: %s",
+                    conn.node_id, e,
+                )
+                return [], 0
+
+        pairs = await asyncio.gather(
+            *[_collect_one(c) for c in self._connections]
+        )
+        all_logs = [p[0] for p in pairs]
+        snapshot_balances = [p[1] for p in pairs]
+        return all_logs, snapshot_balances
 
     # ── Lifecycle ───────────────────────────────────────────────────────
 

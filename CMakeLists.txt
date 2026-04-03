@@ -12,6 +12,7 @@ add_library(blockstore
     src/blockstore/fullcopy.cpp
 )
 target_include_directories(blockstore PUBLIC src/)
+set_target_properties(blockstore PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # pybind11
 find_package(pybind11 QUIET)

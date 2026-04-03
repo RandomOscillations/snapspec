@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from .strategy_interface import SnapshotResult
+from ..validation.conservation import validate_conservation
 
 if TYPE_CHECKING:
     from .strategy_interface import CoordinatorProtocol
@@ -55,13 +56,31 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
         await coordinator.send_all(_RESUME, ts)
         return SnapshotResult(success=False)
 
-    # Phase 3: Commit — no validation needed because writes were paused
+    # Phase 3: Collect logs + balances while writes are still paused.
+    # Causal consistency is trivially guaranteed (no concurrent writes during snapshot).
+    # We run conservation as an empirical baseline check.
+    _, snapshot_balances = await coordinator.collect_write_logs_and_balances_parallel(ts)
+
+    conservation_ok: bool | None = None
+    if coordinator.expected_total > 0:
+        # Write log is empty (writes were paused), so no in-transit tokens.
+        cons = validate_conservation(
+            snapshot_balances, [], coordinator.transfer_amounts, coordinator.expected_total,
+        )
+        conservation_ok = cons.valid
+
+    # Phase 4: Commit — snapshot is consistent by construction
     await coordinator.send_all(_COMMIT, ts)
 
-    # Phase 4: Resume writes
+    # Phase 5: Resume writes
     await coordinator.send_all(_RESUME, ts)
 
-    return SnapshotResult(success=True)
+    return SnapshotResult(
+        success=True,
+        causal_consistent=True,   # trivially true: no writes during snapshot
+        causal_violation_count=0,
+        conservation_holds=conservation_ok,
+    )
 
 
 def _all_responded_with(responses: list[dict | None], expected_type: str) -> bool:

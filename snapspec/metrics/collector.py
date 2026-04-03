@@ -41,6 +41,9 @@ class _SnapshotRecord:
     retries: int
     duration_ms: float
     delta_blocks: list[int] | None
+    causal_consistent: bool | None
+    causal_violation_count: int
+    conservation_holds: bool | None
 
 
 @dataclass
@@ -98,6 +101,9 @@ class MetricsCollector:
             retries=result.retries,
             duration_ms=duration_ms,
             delta_blocks=result.delta_blocks_at_discard,
+            causal_consistent=result.causal_consistent,
+            causal_violation_count=result.causal_violation_count,
+            conservation_holds=result.conservation_holds,
         ))
 
     # ── Continuous sampling ─────────────────────────────────────────────
@@ -219,6 +225,29 @@ class MetricsCollector:
         else:
             summary["avg_delta_blocks_at_discard"] = 0.0
             summary["max_delta_blocks_at_discard"] = 0.0
+
+        # Accuracy metrics
+        causal_checked = [s for s in self._snapshots if s.causal_consistent is not None]
+        if causal_checked:
+            causal_consistent_count = sum(1 for s in causal_checked if s.causal_consistent)
+            summary["causal_consistency_rate"] = causal_consistent_count / len(causal_checked)
+            summary["causal_checked_count"] = float(len(causal_checked))
+            summary["avg_causal_violation_count"] = (
+                sum(s.causal_violation_count for s in causal_checked) / len(causal_checked)
+            )
+        else:
+            summary["causal_consistency_rate"] = -1.0   # not checked
+            summary["causal_checked_count"] = 0.0
+            summary["avg_causal_violation_count"] = 0.0
+
+        conservation_checked = [s for s in self._snapshots if s.conservation_holds is not None]
+        if conservation_checked:
+            conservation_valid_count = sum(1 for s in conservation_checked if s.conservation_holds)
+            summary["conservation_validity_rate"] = conservation_valid_count / len(conservation_checked)
+            summary["conservation_checked_count"] = float(len(conservation_checked))
+        else:
+            summary["conservation_validity_rate"] = -1.0  # not checked
+            summary["conservation_checked_count"] = 0.0
 
         return summary
 

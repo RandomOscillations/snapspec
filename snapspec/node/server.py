@@ -125,13 +125,16 @@ class _MockWriteLogEntry:
         self.partner_node_id = partner_node_id
 
 
-# Maps role strings to the values expected by pybind11 WriteLogEntry.Role
-# The C++ enum exposes CAUSE, EFFECT, NONE. For MockBlockStore we just store strings.
-_ROLE_MAP = {
-    "CAUSE": "CAUSE",
-    "EFFECT": "EFFECT",
-    "NONE": "NONE",
-}
+# Maps role strings to WriteLogEntry.Role enum values (C++) or strings (mock).
+try:
+    import _blockstore as _bs
+    _ROLE_MAP = {
+        "CAUSE": _bs.WriteLogEntry.Role.CAUSE,
+        "EFFECT": _bs.WriteLogEntry.Role.EFFECT,
+        "NONE": _bs.WriteLogEntry.Role.NONE,
+    }
+except ImportError:
+    _ROLE_MAP = {"CAUSE": "CAUSE", "EFFECT": "EFFECT", "NONE": "NONE"}
 
 
 def _role_to_str(role) -> str:
@@ -173,6 +176,7 @@ class StorageNode:
 
         # Token balance (FM6: serialize modifications)
         self._balance = initial_balance
+        self._snapshot_balance = initial_balance  # balance captured at snapshot time
 
         # Serializes write/snapshot operations (FM1: race prevention)
         self._state_lock = asyncio.Lock()
@@ -331,6 +335,7 @@ class StorageNode:
                 return
 
             self.snapshot_ts = snapshot_ts
+            self._snapshot_balance = self._balance
             self.block_store.create_snapshot(snapshot_ts)
             self.state = NodeState.PREPARED
             self.writes_during_snapshot = 0
@@ -351,6 +356,7 @@ class StorageNode:
                 return
 
             self.snapshot_ts = snapshot_ts
+            self._snapshot_balance = self._balance
             self.block_store.create_snapshot(snapshot_ts)
             self.state = NodeState.SNAPPED
             self.writes_during_snapshot = 0
@@ -451,7 +457,9 @@ class StorageNode:
         ]
 
         await self._send(writer, MessageType.WRITE_LOG, ts,
-                         entries=entries, balance=self._balance)
+                         entries=entries,
+                         balance=self._balance,
+                         snapshot_balance=self._snapshot_balance)
 
     # ── Dispatch table ──────────────────────────────────────────────────
 
