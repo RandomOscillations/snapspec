@@ -157,8 +157,8 @@ def plot_results(results: dict):
     labels = [s.replace("_", "\n") for s in strategies]
     colors = ["#4C72B0", "#DD8452", "#55A868"]
 
-    fig, axes = plt.subplots(2, 3, figsize=(14, 8))
-    fig.suptitle("SnapSpec — Snapshot Accuracy & Performance\n(MockBlockStore, 4 nodes, 12s run, cross_node_ratio=0.6)",
+    fig, axes = plt.subplots(3, 3, figsize=(14, 11))
+    fig.suptitle("SnapSpec — Snapshot Accuracy, Recovery & Performance\n(MockBlockStore, 4 nodes, 12s run, cross_node_ratio=0.6)",
                  fontsize=13, fontweight="bold")
 
     def bar(ax, values, title, ylabel, fmt=".1%", ylim=None, color_by_value=False):
@@ -223,22 +223,61 @@ def plot_results(results: dict):
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
-    # ── Row 2: Performance ───────────────────────────────────────────────
+    # ── Row 2: Recovery ──────────────────────────────────────────────────
 
-    # 4. Snapshot commit rate (success rate)
+    # 4. Recovery rate
+    recovery_rates = [results[s].get("recovery_rate", -1.0) for s in strategies]
+    recovery_display = [v if v >= 0 else 0.0 for v in recovery_rates]
+    ax = axes[1][0]
+    bars = ax.bar(labels, recovery_display, color=colors, edgecolor="white", linewidth=0.8)
+    ax.set_title("Snapshot Recovery Rate", fontsize=11)
+    ax.set_ylabel("Fraction recoverable", fontsize=9)
+    ax.set_ylim(0, 1.15)
+    for bar_, val, raw in zip(bars, recovery_display, recovery_rates):
+        label = "N/A" if raw < 0 else f"{val:.1%}"
+        ax.text(bar_.get_x() + bar_.get_width() / 2,
+                bar_.get_height() + 0.02,
+                label, ha="center", va="bottom", fontsize=8)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    # 5. Recovery conservation rate
+    rc_rates = [results[s].get("recovery_conservation_rate", -1.0) for s in strategies]
+    rc_display = [v if v >= 0 else 0.0 for v in rc_rates]
+    ax = axes[1][1]
+    bars = ax.bar(labels, rc_display, color=colors, edgecolor="white", linewidth=0.8)
+    ax.set_title("Recovery Conservation Rate", fontsize=11)
+    ax.set_ylabel("Fraction conserved", fontsize=9)
+    ax.set_ylim(0, 1.15)
+    for bar_, val, raw in zip(bars, rc_display, rc_rates):
+        label = "N/A" if raw < 0 else f"{val:.1%}"
+        ax.text(bar_.get_x() + bar_.get_width() / 2,
+                bar_.get_height() + 0.02,
+                label, ha="center", va="bottom", fontsize=8)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    # 6. Snapshot commit rate (success rate)
     success_rates = [results[s]["snapshot_success_rate"] for s in strategies]
-    bar(axes[1][0], success_rates, "Snapshot Commit Rate",
+    bar(axes[1][2], success_rates, "Snapshot Commit Rate",
         "Fraction committed", fmt=".1%", ylim=(0, 1.15))
 
-    # 5. Avg retry count
+    # ── Row 3: Performance ───────────────────────────────────────────────
+
+    # 7. Avg retry count
     retry_rates = [results[s]["avg_retry_rate"] for s in strategies]
-    bar(axes[1][1], retry_rates, "Avg Retries / Snapshot",
+    bar(axes[2][0], retry_rates, "Avg Retries / Snapshot",
         "Retries", fmt=".2f", ylim=(0, max(retry_rates) * 1.4 + 0.1))
 
-    # 6. p50 snapshot latency
+    # 8. p50 snapshot latency
     p50s = [results[s]["p50_latency_ms"] for s in strategies]
-    bar(axes[1][2], p50s, "p50 Snapshot Latency",
+    bar(axes[2][1], p50s, "p50 Snapshot Latency",
         "Milliseconds", fmt=".1f", ylim=(0, max(p50s) * 1.35 + 1))
+
+    # 9. Avg throughput
+    throughputs = [results[s].get("avg_throughput_writes_sec", 0) for s in strategies]
+    bar(axes[2][2], throughputs, "Avg Throughput",
+        "Writes/sec", fmt=".0f", ylim=(0, max(throughputs) * 1.35 + 1))
 
     plt.tight_layout()
     out = "results/accuracy_demo.png"
@@ -250,13 +289,15 @@ def plot_results(results: dict):
 
 def print_table(results: dict):
     metrics = [
-        ("causal_consistency_rate",   "Causal consistency rate"),
-        ("conservation_validity_rate","Conservation validity rate"),
-        ("avg_causal_violation_count","Avg causal violations/snapshot"),
-        ("snapshot_success_rate",     "Snapshot commit rate"),
-        ("avg_retry_rate",            "Avg retries/snapshot"),
-        ("p50_latency_ms",            "p50 latency (ms)"),
-        ("avg_throughput_writes_sec", "Avg throughput (writes/s)"),
+        ("causal_consistency_rate",     "Causal consistency rate"),
+        ("conservation_validity_rate",  "Conservation validity rate"),
+        ("avg_causal_violation_count",  "Avg causal violations/snapshot"),
+        ("recovery_rate",               "Recovery rate"),
+        ("recovery_conservation_rate",  "Recovery conservation rate"),
+        ("snapshot_success_rate",       "Snapshot commit rate"),
+        ("avg_retry_rate",              "Avg retries/snapshot"),
+        ("p50_latency_ms",              "p50 latency (ms)"),
+        ("avg_throughput_writes_sec",   "Avg throughput (writes/s)"),
     ]
     col_w = 26
     header = f"{'Metric':<38}" + "".join(f"{s:>{col_w}}" for s in results)
