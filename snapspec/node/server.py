@@ -489,6 +489,37 @@ class StorageNode:
                          entries=entries, balance=balance,
                          snapshot_balance=balance)
 
+    async def _handle_reset(self, msg: dict, writer: asyncio.StreamWriter):
+        """Reset node to initial state — used between strategy runs."""
+        ts = msg["logical_timestamp"]
+        new_balance = msg.get("balance", 0)
+
+        async with self._state_lock:
+            # Discard any active snapshot
+            if self.block_store.is_snapshot_active():
+                self.block_store.discard_snapshot()
+
+            # Reset block store
+            self.block_store._blocks = {}
+            if hasattr(self.block_store, '_archives'):
+                self.block_store._archives = {}
+            if hasattr(self.block_store, '_snapshot_blocks'):
+                self.block_store._snapshot_blocks = {}
+
+            # Reset node state
+            self.state = NodeState.IDLE
+            self._balance = new_balance
+            self._snapshot_balance = None
+            self._writes_paused = False
+            self.snapshot_ts = 0
+            self.writes_during_snapshot = 0
+            self.total_writes = 0
+            self.delta_blocks_at_discard = []
+            self._archive_balances = {}
+
+        logger.info("Node %d: RESET (balance=%d)", self.node_id, new_balance)
+        await self._send(writer, MessageType.ACK, ts)
+
     async def _handle_get_snapshot_state(self, msg: dict, writer: asyncio.StreamWriter):
         """Return the last committed snapshot's block data and balance for recovery verification."""
         ts = msg["logical_timestamp"]
@@ -530,4 +561,5 @@ class StorageNode:
         MessageType.ABORT.value: _handle_abort,
         MessageType.GET_WRITE_LOG.value: _handle_get_write_log,
         MessageType.GET_SNAPSHOT_STATE.value: _handle_get_snapshot_state,
+        MessageType.RESET.value: _handle_reset,
     }

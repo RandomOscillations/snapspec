@@ -1,0 +1,86 @@
+services:
+  node0:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: snapspec-node0
+    hostname: node0
+    command: ["--id", "0", "--host", "0.0.0.0", "--port", "9000", "--block-store", "mock", "--balance", "25000"]
+    cap_add:
+      - NET_ADMIN
+    networks:
+      snapnet:
+        ipv4_address: 10.10.0.10
+
+  node1:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: snapspec-node1
+    hostname: node1
+    command: ["--id", "1", "--host", "0.0.0.0", "--port", "9000", "--block-store", "mock", "--balance", "25000"]
+    cap_add:
+      - NET_ADMIN
+    networks:
+      snapnet:
+        ipv4_address: 10.10.0.11
+
+  node2:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: snapspec-node2
+    hostname: node2
+    command: ["--id", "2", "--host", "0.0.0.0", "--port", "9000", "--block-store", "mock", "--balance", "25000"]
+    cap_add:
+      - NET_ADMIN
+    networks:
+      snapnet:
+        ipv4_address: 10.10.0.12
+
+  node3:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: snapspec-node3
+    hostname: node3
+    command: ["--id", "3", "--host", "0.0.0.0", "--port", "9000", "--block-store", "mock", "--balance", "25000"]
+    cap_add:
+      - NET_ADMIN
+    networks:
+      snapnet:
+        ipv4_address: 10.10.0.13
+
+  coordinator:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: snapspec-coordinator
+    hostname: coordinator
+    entrypoint: ["python", "experiments/run_distributed.py"]
+    environment:
+      - SNAPSPEC_NODES=0:node0:9000,1:node1:9000,2:node2:9000,3:node3:9000
+      - SNAPSPEC_STRATEGY=pause_and_snap
+      - SNAPSPEC_DURATION=15
+      - SNAPSPEC_SNAPSHOT_INTERVAL=1.0
+      - SNAPSPEC_WRITE_RATE=200
+      - SNAPSPEC_CROSS_NODE_RATIO=0.4
+      - SNAPSPEC_TOTAL_TOKENS=100000
+      - SNAPSPEC_NETEM_DELAY_MS=2
+    cap_add:
+      - NET_ADMIN
+    depends_on:
+      - node0
+      - node1
+      - node2
+      - node3
+    networks:
+      snapnet:
+        ipv4_address: 10.10.0.100
+
+networks:
+  snapnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.0.0/24

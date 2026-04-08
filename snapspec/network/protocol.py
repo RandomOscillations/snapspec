@@ -42,6 +42,9 @@ class MessageType(str, Enum):
     GET_SNAPSHOT_STATE = "GET_SNAPSHOT_STATE"
     SNAPSHOT_STATE = "SNAPSHOT_STATE"
 
+    # Node management
+    RESET = "RESET"
+
 
 HEADER_SIZE = 4  # 4-byte length prefix
 
