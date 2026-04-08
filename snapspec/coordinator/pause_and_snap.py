@@ -75,11 +75,24 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     # Phase 5: Resume writes
     await coordinator.send_all(_RESUME, ts)
 
+    # Phase 6: Verify recovery if enabled
+    recovery_verified = None
+    recovery_balance_sum = None
+    recovery_conservation = None
+    if coordinator.expected_total > 0:
+        rv = await coordinator.verify_snapshot_recovery(ts)
+        recovery_verified = rv["recovery_success"]
+        recovery_balance_sum = rv["balance_sum"]
+        recovery_conservation = rv.get("conservation_holds")
+
     return SnapshotResult(
         success=True,
         causal_consistent=True,   # trivially true: no writes during snapshot
         causal_violation_count=0,
         conservation_holds=conservation_ok,
+        recovery_verified=recovery_verified,
+        recovery_balance_sum=recovery_balance_sum,
+        recovery_conservation_holds=recovery_conservation,
     )
 
 

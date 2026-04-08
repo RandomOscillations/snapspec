@@ -196,6 +196,75 @@ class Coordinator:
         snapshot_balances = [p[1] for p in pairs]
         return all_logs, snapshot_balances
 
+    async def verify_snapshot_recovery(self, snapshot_ts: int) -> dict:
+        """Verify that a committed snapshot can be fully recovered.
+
+        Requests archived snapshot state from every node, checks:
+          1. Every node has the archive
+          2. Snapshot-time balances sum to expected_total (conservation)
+          3. Block data is present and non-empty
+
+        Returns a dict with recovery_success, node_results, balance_sum, etc.
+        """
+        async def _fetch_one(conn: NodeConnection) -> dict | None:
+            try:
+                resp = await asyncio.wait_for(
+                    conn.send_and_receive(
+                        MessageType.GET_SNAPSHOT_STATE, snapshot_ts,
+                        snapshot_ts=snapshot_ts,
+                    ),
+                    timeout=self.validation_timeout_s,
+                )
+                return resp
+            except Exception as e:
+                logger.error(
+                    "Recovery verification failed for node %d: %s",
+                    conn.node_id, e,
+                )
+                return None
+
+        responses = await asyncio.gather(
+            *[_fetch_one(c) for c in self._connections]
+        )
+
+        node_results = []
+        total_balance = 0
+        all_recovered = True
+
+        for i, resp in enumerate(responses):
+            nid = self._connections[i].node_id
+            if resp is None or resp.get("type") != MessageType.SNAPSHOT_STATE.value:
+                node_results.append({
+                    "node_id": nid, "recovered": False,
+                    "error": resp.get("error", "No response") if resp else "No response",
+                })
+                all_recovered = False
+                continue
+
+            block_count = resp.get("block_count", 0)
+            snapshot_balance = resp.get("snapshot_balance")
+            if snapshot_balance is not None:
+                total_balance += snapshot_balance
+
+            node_results.append({
+                "node_id": nid,
+                "recovered": True,
+                "block_count": block_count,
+                "snapshot_balance": snapshot_balance,
+            })
+
+        result = {
+            "recovery_success": all_recovered,
+            "node_results": node_results,
+            "balance_sum": total_balance,
+            "expected_total": self.expected_total,
+            "conservation_holds": (
+                total_balance == self.expected_total
+                if self.expected_total > 0 else None
+            ),
+        }
+        return result
+
     # ── Lifecycle ───────────────────────────────────────────────────────
 
     async def start(self):

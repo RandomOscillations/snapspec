@@ -21,6 +21,10 @@ class SnapshotResult:
     causal_consistent: bool | None = None       # None = not checked (e.g. trivially true)
     causal_violation_count: int = 0
     conservation_holds: bool | None = None      # None = conservation check not run
+    # Recovery fields — populated after commit if verify_recovery=True
+    recovery_verified: bool | None = None       # None = not checked
+    recovery_balance_sum: int | None = None
+    recovery_conservation_holds: bool | None = None
 
 
 class CoordinatorProtocol(Protocol):
@@ -67,5 +71,12 @@ class CoordinatorProtocol(Protocol):
         Returns:
             (all_logs, snapshot_balances) where snapshot_balances[i] is the balance
             node i held at the moment its snapshot was taken.
+        """
+        ...
+
+    async def verify_snapshot_recovery(self, snapshot_ts: int) -> dict:
+        """Verify that a committed snapshot can be fully recovered from archives.
+
+        Returns dict with recovery_success, node_results, balance_sum, etc.
         """
         ...

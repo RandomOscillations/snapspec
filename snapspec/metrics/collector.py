@@ -44,6 +44,8 @@ class _SnapshotRecord:
     causal_consistent: bool | None
     causal_violation_count: int
     conservation_holds: bool | None
+    recovery_verified: bool | None = None
+    recovery_conservation_holds: bool | None = None
 
 
 @dataclass
@@ -104,6 +106,8 @@ class MetricsCollector:
             causal_consistent=result.causal_consistent,
             causal_violation_count=result.causal_violation_count,
             conservation_holds=result.conservation_holds,
+            recovery_verified=result.recovery_verified,
+            recovery_conservation_holds=result.recovery_conservation_holds,
         ))
 
     # ── Continuous sampling ─────────────────────────────────────────────
@@ -248,6 +252,24 @@ class MetricsCollector:
         else:
             summary["conservation_validity_rate"] = -1.0  # not checked
             summary["conservation_checked_count"] = 0.0
+
+        # Recovery metrics
+        recovery_checked = [s for s in self._snapshots if s.recovery_verified is not None]
+        if recovery_checked:
+            recovery_ok_count = sum(1 for s in recovery_checked if s.recovery_verified)
+            summary["recovery_rate"] = recovery_ok_count / len(recovery_checked)
+            summary["recovery_checked_count"] = float(len(recovery_checked))
+
+            rc_checked = [s for s in recovery_checked if s.recovery_conservation_holds is not None]
+            if rc_checked:
+                rc_ok = sum(1 for s in rc_checked if s.recovery_conservation_holds)
+                summary["recovery_conservation_rate"] = rc_ok / len(rc_checked)
+            else:
+                summary["recovery_conservation_rate"] = -1.0
+        else:
+            summary["recovery_rate"] = -1.0
+            summary["recovery_checked_count"] = 0.0
+            summary["recovery_conservation_rate"] = -1.0
 
         return summary
 

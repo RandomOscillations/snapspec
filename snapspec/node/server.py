@@ -53,6 +53,10 @@ class MockBlockStore:
         self._snapshot_ts = 0
         self._write_log: list[_MockWriteLogEntry] = []
         self._delta_count = 0
+        # Snapshot state: frozen copy of blocks at snapshot creation time
+        self._snapshot_blocks: dict[int, bytes] = {}
+        # Archive storage: maps archive_path -> frozen block dict
+        self._archives: dict[str, dict[int, bytes]] = {}
 
     def init(self, base_path: str, block_size: int, total_blocks: int):
         self._block_size = block_size
@@ -83,10 +87,13 @@ class MockBlockStore:
         self._snapshot_ts = snapshot_ts
         self._delta_count = 0
         self._write_log = []
+        # Freeze current block state as the snapshot
+        self._snapshot_blocks = {bid: bytes(data) for bid, data in self._blocks.items()}
 
     def discard_snapshot(self) -> int:
         assert self._snapshot_active, "Cannot discard: no active snapshot"
         self._snapshot_active = False
+        self._snapshot_blocks = {}
         count = self._delta_count
         self._delta_count = 0
         self._write_log = []
@@ -94,12 +101,18 @@ class MockBlockStore:
 
     def commit_snapshot(self, archive_path: str):
         assert self._snapshot_active, "Cannot commit: no active snapshot"
+        self._archives[archive_path] = self._snapshot_blocks
         self._snapshot_active = False
+        self._snapshot_blocks = {}
         self._delta_count = 0
         self._write_log = []
 
     def get_write_log(self):
         return list(self._write_log)
+
+    def get_archived_blocks(self, archive_path: str) -> dict[int, bytes] | None:
+        """Return the archived snapshot blocks, or None if not found."""
+        return self._archives.get(archive_path)
 
     def get_delta_block_count(self) -> int:
         return self._delta_count
@@ -125,7 +138,9 @@ class _MockWriteLogEntry:
         self.partner_node_id = partner_node_id
 
 
-# Maps role strings to WriteLogEntry.Role enum values (C++) or strings (mock).
+# Maps role strings to the values expected by block stores.
+# For C++ block stores, use the pybind11 WriteLogEntry.Role enum.
+# For MockBlockStore, strings are fine.
 try:
     import _blockstore as _bs
     _ROLE_MAP = {
@@ -134,7 +149,11 @@ try:
         "NONE": _bs.WriteLogEntry.Role.NONE,
     }
 except ImportError:
-    _ROLE_MAP = {"CAUSE": "CAUSE", "EFFECT": "EFFECT", "NONE": "NONE"}
+    _ROLE_MAP = {
+        "CAUSE": "CAUSE",
+        "EFFECT": "EFFECT",
+        "NONE": "NONE",
+    }
 
 
 def _role_to_str(role) -> str:
@@ -176,7 +195,7 @@ class StorageNode:
 
         # Token balance (FM6: serialize modifications)
         self._balance = initial_balance
-        self._snapshot_balance = initial_balance  # balance captured at snapshot time
+        self._snapshot_balance: int | None = None  # balance frozen at snapshot creation
 
         # Serializes write/snapshot operations (FM1: race prevention)
         self._state_lock = asyncio.Lock()
@@ -185,6 +204,9 @@ class StorageNode:
         self.writes_during_snapshot: int = 0
         self.delta_blocks_at_discard: list[int] = []  # history of delta sizes
         self.total_writes: int = 0
+
+        # Archive metadata: maps archive_path -> snapshot-time balance
+        self._archive_balances: dict[str, int] = {}
 
         # Server internals
         self._server: asyncio.Server | None = None
@@ -335,7 +357,7 @@ class StorageNode:
                 return
 
             self.snapshot_ts = snapshot_ts
-            self._snapshot_balance = self._balance
+            self._snapshot_balance = self._balance  # freeze balance at snapshot time
             self.block_store.create_snapshot(snapshot_ts)
             self.state = NodeState.PREPARED
             self.writes_during_snapshot = 0
@@ -356,7 +378,7 @@ class StorageNode:
                 return
 
             self.snapshot_ts = snapshot_ts
-            self._snapshot_balance = self._balance
+            self._snapshot_balance = self._balance  # freeze balance at snapshot time
             self.block_store.create_snapshot(snapshot_ts)
             self.state = NodeState.SNAPPED
             self.writes_during_snapshot = 0
@@ -410,10 +432,14 @@ class StorageNode:
                 )
                 return
 
-            archive_path = f"{self.archive_dir}/node{self.node_id}_snap_{ts}"
+            archive_path = f"{self.archive_dir}/node{self.node_id}_snap_{self.snapshot_ts}"
+            # Save snapshot-time balance before clearing
+            if self._snapshot_balance is not None:
+                self._archive_balances[archive_path] = self._snapshot_balance
             self.block_store.commit_snapshot(archive_path)
             self._writes_paused = False
             self.state = NodeState.IDLE
+            self._snapshot_balance = None
 
         logger.debug("Node %d: COMMITTED snapshot ts=%d", self.node_id, ts)
         await self._send(writer, MessageType.ACK, ts)
@@ -433,6 +459,7 @@ class StorageNode:
             self.delta_blocks_at_discard.append(delta_count)
             self._writes_paused = False
             self.state = NodeState.IDLE
+            self._snapshot_balance = None
 
         logger.debug("Node %d: ABORTED snapshot, delta_blocks=%d", self.node_id, delta_count)
         await self._send(writer, MessageType.ACK, ts, delta_blocks=delta_count)
@@ -456,10 +483,38 @@ class StorageNode:
             if e.timestamp <= max_ts
         ]
 
+        # Return snapshot-time balance if available, otherwise live balance
+        balance = self._snapshot_balance if self._snapshot_balance is not None else self._balance
         await self._send(writer, MessageType.WRITE_LOG, ts,
-                         entries=entries,
-                         balance=self._balance,
-                         snapshot_balance=self._snapshot_balance)
+                         entries=entries, balance=balance,
+                         snapshot_balance=balance)
+
+    async def _handle_get_snapshot_state(self, msg: dict, writer: asyncio.StreamWriter):
+        """Return the last committed snapshot's block data and balance for recovery verification."""
+        ts = msg["logical_timestamp"]
+        archive_ts = msg.get("snapshot_ts", ts)
+        archive_path = f"{self.archive_dir}/node{self.node_id}_snap_{archive_ts}"
+
+        async with self._state_lock:
+            archived = self.block_store.get_archived_blocks(archive_path)
+
+        if archived is None:
+            await self._send_error(writer, msg, f"No archive found at {archive_path}")
+            return
+
+        # Encode block data as base64 for JSON transport
+        blocks_b64 = {
+            str(bid): base64.b64encode(data).decode("ascii")
+            for bid, data in archived.items()
+        }
+
+        snapshot_balance = self._archive_balances.get(archive_path)
+
+        await self._send(writer, MessageType.SNAPSHOT_STATE, ts,
+                         snapshot_ts=archive_ts,
+                         blocks=blocks_b64,
+                         block_count=len(archived),
+                         snapshot_balance=snapshot_balance)
 
     # ── Dispatch table ──────────────────────────────────────────────────
 
@@ -474,4 +529,5 @@ class StorageNode:
         MessageType.COMMIT.value: _handle_commit,
         MessageType.ABORT.value: _handle_abort,
         MessageType.GET_WRITE_LOG.value: _handle_get_write_log,
+        MessageType.GET_SNAPSHOT_STATE.value: _handle_get_snapshot_state,
     }

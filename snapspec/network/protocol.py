@@ -38,6 +38,10 @@ class MessageType(str, Enum):
     READ_RESP = "READ_RESP"
     PAUSED_ERR = "PAUSED_ERR"
 
+    # Recovery
+    GET_SNAPSHOT_STATE = "GET_SNAPSHOT_STATE"
+    SNAPSHOT_STATE = "SNAPSHOT_STATE"
+
 
 HEADER_SIZE = 4  # 4-byte length prefix
 

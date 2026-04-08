@@ -99,6 +99,16 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                 )
                 conservation_ok = cons.valid
 
+            # Verify recovery if enabled
+            recovery_verified = None
+            recovery_balance_sum = None
+            recovery_conservation = None
+            if coordinator.expected_total > 0:
+                rv = await coordinator.verify_snapshot_recovery(attempt_ts)
+                recovery_verified = rv["recovery_success"]
+                recovery_balance_sum = rv["balance_sum"]
+                recovery_conservation = rv.get("conservation_holds")
+
             return SnapshotResult(
                 success=True,
                 retries=attempt,
@@ -106,6 +116,9 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                 causal_consistent=True,
                 causal_violation_count=0,
                 conservation_holds=conservation_ok,
+                recovery_verified=recovery_verified,
+                recovery_balance_sum=recovery_balance_sum,
+                recovery_conservation_holds=recovery_conservation,
             )
 
         # Step 4b: Inconsistent — abort

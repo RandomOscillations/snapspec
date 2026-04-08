@@ -21,9 +21,12 @@ class MockCoordinator:
     validation_timeout_s: float = 1.0
     delta_size_threshold_frac: float = 0.10
     total_blocks_per_node: int = 4096
+    expected_total: int = 0
+    transfer_amounts: dict = field(default_factory=dict)
     _clock: int = 0
     _responses: dict[str, list[dict]] = field(default_factory=dict)
     _write_logs: list[list[dict]] = field(default_factory=list)
+    _snapshot_balances: list[int] = field(default_factory=list)
     _call_log: list[tuple[str, int]] = field(default_factory=list)
 
     def tick(self) -> int:
@@ -45,6 +48,23 @@ class MockCoordinator:
     async def collect_write_logs_parallel(self, ts: int) -> list[list[dict]]:
         self._call_log.append(("GET_WRITE_LOG", ts))
         return self._write_logs
+
+    async def collect_write_logs_and_balances_parallel(
+        self, ts: int
+    ) -> tuple[list[list[dict]], list[int]]:
+        self._call_log.append(("GET_WRITE_LOG", ts))
+        balances = self._snapshot_balances or [0] * len(self._write_logs)
+        return self._write_logs, balances
+
+    async def verify_snapshot_recovery(self, snapshot_ts: int) -> dict:
+        self._call_log.append(("VERIFY_RECOVERY", snapshot_ts))
+        return {
+            "recovery_success": True,
+            "node_results": [],
+            "balance_sum": self.expected_total,
+            "expected_total": self.expected_total,
+            "conservation_holds": True if self.expected_total > 0 else None,
+        }
 
     def was_called(self, msg_type: str) -> bool:
         return any(t == msg_type for t, _ in self._call_log)
@@ -170,16 +190,15 @@ class TestSpeculative:
         from snapspec.coordinator.speculative import execute
 
         call_count = [0]
-        original_logs = coord._write_logs
 
         # First 2 attempts return inconsistent logs, 3rd returns consistent
         async def mock_collect(ts):
             call_count[0] += 1
             if call_count[0] <= 2:
-                return [[_entry(tag=1, role="CAUSE")], []]  # inconsistent
-            return [[], []]  # consistent
+                return [[_entry(tag=1, role="CAUSE")], []], [0, 0]  # inconsistent
+            return [[], []], [0, 0]  # consistent
 
-        coord.collect_write_logs_parallel = mock_collect
+        coord.collect_write_logs_and_balances_parallel = mock_collect
         result = await execute(coord, ts=1)
         assert result.success
         assert result.retries == 2
@@ -189,25 +208,15 @@ class TestSpeculative:
         from snapspec.coordinator.speculative import execute
         coord.speculative_max_retries = 2
 
-        # Always return inconsistent
-        async def always_inconsistent(ts):
-            return [[_entry(tag=1, role="CAUSE")], []]
-
-        coord.collect_write_logs_parallel = always_inconsistent
-
-        # But two-phase fallback logs are consistent
-        coord.set_write_logs([[], []])
-        # Need to restore collect for two-phase fallback
-        original_collect = None
         call_count = [0]
 
         async def mock_collect(ts):
             call_count[0] += 1
             if call_count[0] <= 3:  # speculative attempts (0,1,2)
-                return [[_entry(tag=1, role="CAUSE")], []]
-            return [[], []]  # two-phase fallback
+                return [[_entry(tag=1, role="CAUSE")], []], [0, 0]
+            return [[], []], [0, 0]  # two-phase fallback
 
-        coord.collect_write_logs_parallel = mock_collect
+        coord.collect_write_logs_and_balances_parallel = mock_collect
         result = await execute(coord, ts=1)
         assert result.success  # two-phase fallback succeeds
         assert result.retries == 3  # max_retries + 1 indicates fallback
@@ -221,10 +230,10 @@ class TestSpeculative:
         async def inconsistent_then_consistent(ts):
             call_count[0] += 1
             if call_count[0] == 1:
-                return [[_entry(tag=1, role="CAUSE")], []]
-            return [[], []]
+                return [[_entry(tag=1, role="CAUSE")], []], [0, 0]
+            return [[], []], [0, 0]
 
-        coord.collect_write_logs_parallel = inconsistent_then_consistent
+        coord.collect_write_logs_and_balances_parallel = inconsistent_then_consistent
         result = await execute(coord, ts=1)
         assert result.success
         assert result.delta_blocks_at_discard is not None
