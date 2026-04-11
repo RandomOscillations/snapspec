@@ -1,0 +1,49 @@
+experiment: mysql_baseline
+config_name: mysql_speculative
+param_value: default
+
+num_nodes: 3
+strategy: speculative
+
+duration_s: 60
+snapshot_interval_s: 5.0
+
+write_rate: 100
+cross_node_ratio: 0.2
+
+block_store_type: mysql
+num_accounts: 100
+
+total_tokens: 300000
+
+# SNAP_NOW records balance immediately; writes keep flowing.
+# Write log tracks concurrent dependency tags.
+# On causal violation: ABORT + retry (up to speculative_max_retries).
+# After max retries: coordinator falls back to two_phase.
+speculative_max_retries: 5
+delta_size_threshold_frac: 0.1
+
+mysql:
+  nodes:
+    - node_id: 0
+      host: mysql-0
+      port: 3306
+      user: root
+      password: snapspec
+      database: snapspec_node_0
+
+    - node_id: 1
+      host: mysql-1
+      port: 3306
+      user: root
+      password: snapspec
+      database: snapspec_node_1
+
+    - node_id: 2
+      host: mysql-2
+      port: 3306
+      user: root
+      password: snapspec
+      database: snapspec_node_2
+
+seed: 42

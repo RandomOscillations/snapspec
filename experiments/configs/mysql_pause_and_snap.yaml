@@ -1,0 +1,45 @@
+experiment: mysql_baseline
+config_name: mysql_pause_and_snap
+param_value: default
+
+num_nodes: 3
+strategy: pause_and_snap
+
+duration_s: 60
+snapshot_interval_s: 5.0
+
+write_rate: 100
+cross_node_ratio: 0.2
+
+block_store_type: mysql
+num_accounts: 100       # account rows per node (maps block_id % num_accounts)
+
+total_tokens: 300000    # 100 000 per node × 3 nodes
+
+# MySQL connection info for each node.
+# When running via docker-compose the hosts are service names.
+# For local testing change hosts to 127.0.0.1 and use ports 3306/3307/3308.
+mysql:
+  nodes:
+    - node_id: 0
+      host: mysql-0
+      port: 3306
+      user: root
+      password: snapspec
+      database: snapspec_node_0
+
+    - node_id: 1
+      host: mysql-1
+      port: 3306
+      user: root
+      password: snapspec
+      database: snapspec_node_1
+
+    - node_id: 2
+      host: mysql-2
+      port: 3306
+      user: root
+      password: snapspec
+      database: snapspec_node_2
+
+seed: 42

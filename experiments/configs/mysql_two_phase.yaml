@@ -1,0 +1,45 @@
+experiment: mysql_baseline
+config_name: mysql_two_phase
+param_value: default
+
+num_nodes: 3
+strategy: two_phase
+
+duration_s: 60
+snapshot_interval_s: 5.0
+
+write_rate: 100
+cross_node_ratio: 0.2
+
+block_store_type: mysql
+num_accounts: 100
+
+total_tokens: 300000
+
+# PREPARE opens START TRANSACTION WITH CONSISTENT SNAPSHOT on each node.
+# InnoDB MVCC freezes the read view; concurrent writes go to the normal pool.
+# COMMIT reads from the frozen view → archives exact snapshot state.
+mysql:
+  nodes:
+    - node_id: 0
+      host: mysql-0
+      port: 3306
+      user: root
+      password: snapspec
+      database: snapspec_node_0
+
+    - node_id: 1
+      host: mysql-1
+      port: 3306
+      user: root
+      password: snapspec
+      database: snapspec_node_1
+
+    - node_id: 2
+      host: mysql-2
+      port: 3306
+      user: root
+      password: snapspec
+      database: snapspec_node_2
+
+seed: 42

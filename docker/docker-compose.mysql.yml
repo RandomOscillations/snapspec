@@ -1,0 +1,97 @@
+version: "3.9"
+
+# SnapSpec MySQL experiment stack
+#
+# Usage:
+#   docker compose up                          # speculative (default)
+#   STRATEGY=two_phase docker compose up       # two-phase
+#   STRATEGY=pause_and_snap docker compose up  # pause-and-snap
+#
+# Results land in ../results/ on the host.
+
+networks:
+  snapspec:
+    driver: bridge
+
+services:
+
+  # ── MySQL nodes ──────────────────────────────────────────────────────
+
+  mysql-0:
+    image: mysql:8.0
+    networks: [snapspec]
+    environment:
+      MYSQL_ROOT_PASSWORD: snapspec
+      MYSQL_DATABASE: snapspec_node_0
+    ports:
+      - "3306:3306"   # exposed to host for direct inspection / debugging
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1",
+             "-u", "root", "-psnapspec"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+
+  mysql-1:
+    image: mysql:8.0
+    networks: [snapspec]
+    environment:
+      MYSQL_ROOT_PASSWORD: snapspec
+      MYSQL_DATABASE: snapspec_node_1
+    ports:
+      - "3307:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1",
+             "-u", "root", "-psnapspec"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+
+  mysql-2:
+    image: mysql:8.0
+    networks: [snapspec]
+    environment:
+      MYSQL_ROOT_PASSWORD: snapspec
+      MYSQL_DATABASE: snapspec_node_2
+    ports:
+      - "3308:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1",
+             "-u", "root", "-psnapspec"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+
+  # ── Experiment runner ────────────────────────────────────────────────
+
+  experiment:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    networks: [snapspec]
+    # links registers mysql-0/1/2 as hostnames in /etc/hosts of this
+    # container, bypassing Docker's embedded DNS which can lag at startup.
+    links:
+      - mysql-0
+      - mysql-1
+      - mysql-2
+    depends_on:
+      mysql-0:
+        condition: service_healthy
+      mysql-1:
+        condition: service_healthy
+      mysql-2:
+        condition: service_healthy
+    environment:
+      # Override STRATEGY to switch configs without rebuilding the image.
+      STRATEGY: ${STRATEGY:-speculative}
+    command: >
+      python experiments/run_experiment.py
+      --config experiments/configs/mysql_${STRATEGY:-speculative}.yaml
+      --rep 1
+      --output /results
+    volumes:
+      - ../results:/results

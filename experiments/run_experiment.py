@@ -28,6 +28,36 @@ from snapspec.metrics.collector import MetricsCollector
 
 logger = logging.getLogger(__name__)
 
+
+def create_mysql_nodes(config: dict):
+    """Create MySQLStorageNode instances from a config with a 'mysql' section."""
+    from snapspec.mysql.node import MySQLStorageNode
+
+    mysql_cfg    = config["mysql"]
+    num_nodes    = config["num_nodes"]
+    num_accounts = config.get("num_accounts", 256)
+    total_tokens = config.get("total_tokens", 1_000_000)
+
+    nodes = []
+    for i in range(num_nodes):
+        n = mysql_cfg["nodes"][i]
+        node = MySQLStorageNode(
+            node_id=n["node_id"],
+            host="127.0.0.1",
+            port=0,
+            mysql_config={
+                "host":     n["host"],
+                "port":     n.get("port", 3306),
+                "user":     n["user"],
+                "password": n["password"],
+                "database": n["database"],
+            },
+            num_accounts=num_accounts,
+            initial_balance=total_tokens // num_nodes,
+        )
+        nodes.append(node)
+    return nodes
+
 # Timeout for node startup
 _NODE_STARTUP_TIMEOUT_S = 10.0
 
@@ -149,20 +179,35 @@ async def run_single(config: dict, rep: int, output_dir: str) -> str:
     Returns:
         Path to the output CSV file.
     """
-    num_nodes = config["num_nodes"]
+    num_nodes    = config["num_nodes"]
     total_tokens = config.get("total_tokens", 1_000_000)
+    bs_type      = config.get("block_store_type", "mock")
 
-    # 1. Spawn storage nodes as separate processes
-    node_procs = []
+    # ── 1. Start storage nodes ────────────────────────────────────────────
+    # MySQL path: nodes manage their own aiomysql pool; no subprocess needed.
+    # All other backends: spawn each node as a separate OS process.
+    node_procs   = []
     node_configs = []
-    try:
-        for i in range(num_nodes):
-            proc, ncfg = await _spawn_node(i, config, total_tokens, num_nodes)
-            node_procs.append(proc)
-            node_configs.append(ncfg)
-    except Exception:
-        await _stop_nodes(node_procs)
-        raise
+    mysql_nodes  = []
+
+    if bs_type == "mysql":
+        mysql_nodes = create_mysql_nodes(config)
+        for node in mysql_nodes:
+            await node.start()
+        node_configs = [
+            {"node_id": n.node_id, "host": "127.0.0.1", "port": n.actual_port}
+            for n in mysql_nodes
+        ]
+    else:
+        # Original subprocess path (unchanged)
+        try:
+            for i in range(num_nodes):
+                proc, ncfg = await _spawn_node(i, config, total_tokens, num_nodes)
+                node_procs.append(proc)
+                node_configs.append(ncfg)
+        except Exception:
+            await _stop_nodes(node_procs)
+            raise
 
     try:
         # 2. Create metrics collector
@@ -222,8 +267,12 @@ async def run_single(config: dict, rep: int, output_dir: str) -> str:
         await coordinator.stop()
 
     finally:
-        # 8. Stop all node processes
-        await _stop_nodes(node_procs)
+        # 8. Stop nodes (MySQL nodes: close DB pool; others: kill processes)
+        if mysql_nodes:
+            for node in mysql_nodes:
+                await node.stop()
+        else:
+            await _stop_nodes(node_procs)
 
     # 9. Export
     os.makedirs(output_dir, exist_ok=True)
