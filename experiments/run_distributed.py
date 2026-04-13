@@ -228,7 +228,8 @@ async def main():
     apply_netem(netem_delay)
 
     print("=== SnapSpec Distributed Experiment ===")
-    print(f"Nodes: {num_nodes} ({', '.join(f'{c['host']}:{c['port']}' for c in node_configs)})")
+    node_list = ', '.join(f"{c['host']}:{c['port']}" for c in node_configs)
+    print(f"Nodes: {num_nodes} ({node_list})")
     print(f"Strategies: {', '.join(strategies)}")
     print(f"Duration: {cfg['duration_s']}s, Interval: {cfg['snapshot_interval_s']}s")
     print(f"Write rate: {cfg['write_rate']}/s, Cross-node ratio: {cfg['cross_node_ratio']}")
