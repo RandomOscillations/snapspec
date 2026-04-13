@@ -79,11 +79,12 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             conservation_ok = cons.valid
             if not cons.valid:
                 logger.warning(
-                    "Two-phase conservation failed at ts=%d: %s | balances=%s | in_transit_tags=%s",
+                    "Two-phase conservation failed at ts=%d: %s | balances=%s | in_transit_tags=%s | post_roles=%s",
                     ts,
                     cons.detail,
                     snapshot_balances,
                     cons.in_transit_tags[:10],
+                    cons.post_role_samples,
                 )
 
         # Verify recovery if enabled

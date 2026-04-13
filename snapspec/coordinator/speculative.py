@@ -104,12 +104,13 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                 conservation_ok = cons.valid
                 if not cons.valid:
                     logger.warning(
-                        "Speculative conservation failed at ts=%d attempt=%d: %s | balances=%s | in_transit_tags=%s",
+                        "Speculative conservation failed at ts=%d attempt=%d: %s | balances=%s | in_transit_tags=%s | post_roles=%s",
                         attempt_ts,
                         attempt,
                         cons.detail,
                         snapshot_balances,
                         cons.in_transit_tags[:10],
+                        cons.post_role_samples,
                     )
 
             # Verify recovery if enabled

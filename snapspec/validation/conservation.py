@@ -27,6 +27,7 @@ class ConservationResult:
     balance_sum: int
     detail: str
     in_transit_tags: list[int]
+    post_role_samples: list[str]
 
 
 def validate_conservation(
@@ -74,6 +75,11 @@ def validate_conservation(
             in_transit_total += amount
             in_transit_tags.append(tag)
 
+    post_role_samples = [
+        f"tag={tag}:roles={','.join(sorted(post_roles))}:amount={transfer_amounts.get(tag, 0)}"
+        for tag, post_roles in sorted(tag_to_post_roles.items())[:10]
+    ]
+
     observed_total = balance_sum + in_transit_total
 
     if observed_total == expected_total:
@@ -85,6 +91,7 @@ def validate_conservation(
             balance_sum=balance_sum,
             detail=f"Conservation holds: {balance_sum} (balances) + {in_transit_total} (in-transit) = {expected_total}",
             in_transit_tags=in_transit_tags,
+            post_role_samples=post_role_samples,
         )
     else:
         return ConservationResult(
@@ -98,4 +105,5 @@ def validate_conservation(
                 f"= {observed_total}, expected {expected_total}, diff = {observed_total - expected_total}"
             ),
             in_transit_tags=in_transit_tags,
+            post_role_samples=post_role_samples,
         )
