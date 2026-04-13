@@ -120,6 +120,21 @@ class TestCrossNodeTransfer:
             assert amount > 0, "transfer amount should be positive"
 
     @pytest.mark.asyncio
+    async def test_transfer_registered_before_credit(self, nodes):
+        wl = WorkloadGenerator(
+            _node_configs(nodes), write_rate=100, cross_node_ratio=1.0,
+            get_timestamp=_make_clock(), total_tokens=30_000,
+            block_size=64, total_blocks=32, seed=42, effect_delay_s=0.05,
+        )
+
+        task = asyncio.create_task(wl._do_cross_node_transfer())
+        await asyncio.sleep(0.02)
+
+        assert len(wl.transfer_amounts) == 1, "Transfer should be tracked while credit is still pending"
+
+        await task
+
+    @pytest.mark.asyncio
     async def test_debit_before_credit_ordering(self, nodes):
         """FM3: Verify CAUSE timestamp < EFFECT timestamp for every transfer."""
         wl = WorkloadGenerator(

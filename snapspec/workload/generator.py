@@ -58,6 +58,7 @@ class WorkloadGenerator:
         block_size: int = 4096,
         total_blocks: int = 256,
         seed: int | None = None,
+        effect_delay_s: float = 0.0,
     ):
         self._node_configs = node_configs
         self._write_rate = write_rate
@@ -66,6 +67,7 @@ class WorkloadGenerator:
         self._total_tokens = total_tokens
         self._block_size = block_size
         self._total_blocks = total_blocks
+        self._effect_delay_s = effect_delay_s
 
         self._rng = random.Random(seed)
         self._node_ids = [cfg["node_id"] for cfg in node_configs]
@@ -200,6 +202,11 @@ class WorkloadGenerator:
         block_id = self._rng.randint(0, self._total_blocks - 1)
         data = os.urandom(self._block_size)
 
+        # Register the transfer before issuing either half so conservation
+        # validation can account for a transfer that is in flight exactly at
+        # the snapshot boundary.
+        self._transfer_amounts[dep_tag] = amount
+
         # Step 1: DEBIT (CAUSE) — must complete before credit
         debit_ts = self._get_timestamp()
         await self._send_write_with_retry(
@@ -207,6 +214,9 @@ class WorkloadGenerator:
             dep_tag=dep_tag, role="CAUSE", partner=dest,
             balance_delta=-amount,
         )
+
+        if self._effect_delay_s > 0:
+            await asyncio.sleep(self._effect_delay_s)
 
         # Step 2: CREDIT (EFFECT) — only after debit ACK'd
         credit_ts = self._get_timestamp()
@@ -216,8 +226,7 @@ class WorkloadGenerator:
             balance_delta=amount,
         )
 
-        # Track for conservation validation
-        self._transfer_amounts[dep_tag] = amount
+        # Update local bookkeeping after the transfer is fully applied.
         self._balances[source] -= amount
         self._balances[dest] += amount
 

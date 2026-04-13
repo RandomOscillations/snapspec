@@ -46,6 +46,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cross-node-ratio", type=float, default=0.10)
     parser.add_argument("--total-tokens", type=int, default=100000)
     parser.add_argument("--total-blocks", type=int, default=256)
+    parser.add_argument(
+        "--effect-delay-ms",
+        type=float,
+        default=0.0,
+        help="Delay between debit and credit halves of a cross-node transfer",
+    )
     parser.add_argument("--rep", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
@@ -135,6 +141,7 @@ def main() -> int:
             "SNAPSPEC_WRITE_RATE": str(args.write_rate),
             "SNAPSPEC_TOTAL_TOKENS": str(args.total_tokens),
             "SNAPSPEC_TOTAL_BLOCKS": str(args.total_blocks),
+            "SNAPSPEC_EFFECT_DELAY_MS": str(args.effect_delay_ms),
             "SNAPSPEC_CONFIG_PREFIX": "row",
             "SNAPSPEC_REP": str(args.rep),
             "SNAPSPEC_SEED": str(args.seed),

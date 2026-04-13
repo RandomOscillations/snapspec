@@ -155,6 +155,7 @@ async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> tu
         block_size=cfg.get("block_size", 4096),
         total_blocks=cfg.get("total_blocks", 256),
         seed=cfg.get("seed", 42),
+        effect_delay_s=cfg.get("effect_delay_s", 0.0),
     )
     await workload.start()
 
@@ -233,6 +234,7 @@ async def main():
         "rep": int(os.environ.get("SNAPSPEC_REP", "1")),
         "seed": int(os.environ.get("SNAPSPEC_SEED", "42")),
         "speculative_max_retries": int(os.environ.get("SNAPSPEC_SPEC_MAX_RETRIES", "5")),
+        "effect_delay_s": float(os.environ.get("SNAPSPEC_EFFECT_DELAY_MS", "0")) / 1000.0,
     }
     output_dir = os.environ.get("SNAPSPEC_OUTPUT_DIR", "results")
 
@@ -245,6 +247,7 @@ async def main():
     print(f"Strategies: {', '.join(strategies)}")
     print(f"Duration: {cfg['duration_s']}s, Interval: {cfg['snapshot_interval_s']}s")
     print(f"Write rate: {cfg['write_rate']}/s, Cross-node ratio: {cfg['cross_node_ratio']}")
+    print(f"Cross-node effect delay: {cfg['effect_delay_s'] * 1000:.1f}ms")
     print(f"Netem delay: {netem_delay}ms")
     print(f"Experiment: {cfg['experiment_name']}, Param: {cfg['param_name']}, Rep: {cfg['rep']}")
     print()
