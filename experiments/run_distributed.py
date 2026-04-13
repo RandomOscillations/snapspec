@@ -1,16 +1,10 @@
 """
-Distributed experiment runner â€” connects to pre-existing storage node containers.
+Distributed experiment runner — connects to pre-existing storage nodes.
 
 Reads node addresses from SNAPSPEC_NODES env var (format: id:host:port,id:host:port,...).
-Runs coordinator + workload in this container, nodes run in separate containers.
+Runs coordinator + workload against separate remote nodes.
 
-This is the real distributed deployment â€” no subprocess spawning, no simulation.
-
-Usage (inside Docker):
-    SNAPSPEC_NODES=0:node0:9000,1:node1:9000 python experiments/run_distributed.py
-
-Usage (standalone):
-    SNAPSPEC_NODES=0:host1:9000,1:host2:9000 python experiments/run_distributed.py
+This is the real distributed deployment path — no subprocess spawning.
 """
 
 from __future__ import annotations
@@ -25,10 +19,10 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from snapspec.coordinator.coordinator import Coordinator
+from snapspec.metrics.collector import MetricsCollector
 from snapspec.network.connection import NodeConnection
 from snapspec.network.protocol import MessageType
 from snapspec.workload.generator import WorkloadGenerator
-from snapspec.metrics.collector import MetricsCollector
 
 logger = logging.getLogger(__name__)
 
@@ -39,17 +33,16 @@ def get_strategy_fn(name: str):
     if name == "pause_and_snap":
         from snapspec.coordinator.pause_and_snap import execute
         return execute
-    elif name == "two_phase":
+    if name == "two_phase":
         from snapspec.coordinator.two_phase import execute
         return execute
-    elif name == "speculative":
+    if name == "speculative":
         from snapspec.coordinator.speculative import execute
         return execute
     raise ValueError(f"Unknown strategy: {name}")
 
 
 def parse_node_configs(env_str: str) -> list[dict]:
-    """Parse SNAPSPEC_NODES env var: '0:host0:9000,1:host1:9000,...'"""
     configs = []
     for entry in env_str.strip().split(","):
         parts = entry.strip().split(":")
@@ -62,22 +55,21 @@ def parse_node_configs(env_str: str) -> list[dict]:
 
 
 def apply_netem(delay_ms: int):
-    """Apply tc netem delay to simulate network latency."""
     if delay_ms <= 0:
         return
     try:
         subprocess.run(
             ["tc", "qdisc", "add", "dev", "eth0", "root", "netem",
              "delay", f"{delay_ms}ms", f"{delay_ms // 4}ms"],
-            check=True, capture_output=True,
+            check=True,
+            capture_output=True,
         )
         logger.info("Applied tc netem: %dms +/- %dms delay on eth0", delay_ms, delay_ms // 4)
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        logger.warning("tc netem failed (non-fatal): %s", e)
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        logger.warning("tc netem failed (non-fatal): %s", exc)
 
 
 async def wait_for_nodes(node_configs: list[dict], timeout: float = 30.0):
-    """Wait until all nodes are reachable via TCP."""
     start = time.monotonic()
     for cfg in node_configs:
         while True:
@@ -100,16 +92,36 @@ async def wait_for_nodes(node_configs: list[dict], timeout: float = 30.0):
                 await asyncio.sleep(0.5)
 
 
-async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> dict:
-    """Run a single strategy experiment against live nodes."""
-    num_nodes = len(node_configs)
+async def reset_nodes(node_configs: list[dict], per_node_balance: int):
+    for cfg_item in node_configs:
+        conn = NodeConnection(
+            node_id=cfg_item["node_id"],
+            host=cfg_item["host"],
+            port=cfg_item["port"],
+        )
+        await conn.connect()
+        await conn.send_and_receive(MessageType.RESET, 0, balance=per_node_balance)
+        await conn.close()
+
+
+def build_metrics_identity(strategy_name: str, cfg: dict) -> tuple[str, str, str, int]:
+    experiment_name = cfg.get("experiment_name", "distributed")
+    config_prefix = cfg.get("config_prefix", "row")
+    param_name = cfg.get("param_name", "default")
+    rep = int(cfg.get("rep", 1))
+    config_name = f"{config_prefix}_{strategy_name}"
+    return experiment_name, config_name, str(param_name), rep
+
+
+async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> tuple[dict, MetricsCollector]:
     total_tokens = cfg["total_tokens"]
+    experiment_name, config_name, param_name, rep = build_metrics_identity(strategy_name, cfg)
 
     metrics = MetricsCollector(
-        experiment="distributed",
-        config=strategy_name,
-        param_value="default",
-        rep=1,
+        experiment=experiment_name,
+        config=config_name,
+        param_value=param_name,
+        rep=rep,
     )
 
     coordinator = Coordinator(
@@ -118,7 +130,7 @@ async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> di
         snapshot_interval_s=cfg["snapshot_interval_s"],
         on_snapshot_complete=metrics.on_snapshot_complete,
         total_blocks_per_node=cfg.get("total_blocks", 256),
-        speculative_max_retries=5,
+        speculative_max_retries=int(cfg.get("speculative_max_retries", 5)),
     )
     await coordinator.start()
 
@@ -130,7 +142,7 @@ async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> di
         total_tokens=total_tokens,
         block_size=cfg.get("block_size", 4096),
         total_blocks=cfg.get("total_blocks", 256),
-        seed=42,
+        seed=cfg.get("seed", 42),
     )
     await workload.start()
 
@@ -140,9 +152,7 @@ async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> di
     await metrics.start_continuous_sampling(workload)
 
     coordinator._running = True
-    snap_task = asyncio.create_task(
-        coordinator._snapshot_loop(cfg["duration_s"])
-    )
+    snap_task = asyncio.create_task(coordinator._snapshot_loop(cfg["duration_s"]))
     try:
         await snap_task
     except asyncio.CancelledError:
@@ -154,20 +164,20 @@ async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> di
 
     summary = metrics.compute_summary()
     summary["strategy"] = strategy_name
-    return summary
+    return summary, metrics
 
 
 def print_table(results: dict):
     metrics_list = [
-        ("causal_consistency_rate",     "Causal consistency rate"),
-        ("conservation_validity_rate",  "Conservation validity rate"),
-        ("avg_causal_violation_count",  "Avg causal violations/snapshot"),
-        ("recovery_rate",               "Recovery rate"),
-        ("recovery_conservation_rate",  "Recovery conservation rate"),
-        ("snapshot_success_rate",       "Snapshot commit rate"),
-        ("avg_retry_rate",              "Avg retries/snapshot"),
-        ("p50_latency_ms",              "p50 latency (ms)"),
-        ("avg_throughput_writes_sec",   "Avg throughput (writes/s)"),
+        ("causal_consistency_rate", "Causal consistency rate"),
+        ("conservation_validity_rate", "Conservation validity rate"),
+        ("avg_causal_violation_count", "Avg causal violations/snapshot"),
+        ("recovery_rate", "Recovery rate"),
+        ("recovery_conservation_rate", "Recovery conservation rate"),
+        ("snapshot_success_rate", "Snapshot commit rate"),
+        ("avg_retry_rate", "Avg retries/snapshot"),
+        ("p50_latency_ms", "p50 latency (ms)"),
+        ("avg_throughput_writes_sec", "Avg throughput (writes/s)"),
     ]
     col_w = 26
     header = f"{'Metric':<38}" + "".join(f"{s:>{col_w}}" for s in results)
@@ -175,8 +185,8 @@ def print_table(results: dict):
     print("-" * len(header))
     for key, label in metrics_list:
         row = f"{label:<38}"
-        for s in results:
-            val = results[s].get(key, float("nan"))
+        for strategy_name in results:
+            val = results[strategy_name].get(key, float("nan"))
             if "rate" in key:
                 row += f"{'N/A' if val < 0 else f'{val:.1%}':>{col_w}}"
             else:
@@ -185,7 +195,6 @@ def print_table(results: dict):
 
 
 async def main():
-    # Parse configuration from environment
     nodes_env = os.environ.get("SNAPSPEC_NODES")
     if not nodes_env:
         print("ERROR: SNAPSPEC_NODES env var required (format: 0:host:port,1:host:port,...)")
@@ -206,55 +215,62 @@ async def main():
         "cross_node_ratio": float(os.environ.get("SNAPSPEC_CROSS_NODE_RATIO", "0.4")),
         "block_size": int(os.environ.get("SNAPSPEC_BLOCK_SIZE", "4096")),
         "total_blocks": int(os.environ.get("SNAPSPEC_TOTAL_BLOCKS", "256")),
+        "experiment_name": os.environ.get("SNAPSPEC_EXPERIMENT", "distributed"),
+        "config_prefix": os.environ.get("SNAPSPEC_CONFIG_PREFIX", "row"),
+        "param_name": os.environ.get("SNAPSPEC_PARAM_VALUE", "default"),
+        "rep": int(os.environ.get("SNAPSPEC_REP", "1")),
+        "seed": int(os.environ.get("SNAPSPEC_SEED", "42")),
+        "speculative_max_retries": int(os.environ.get("SNAPSPEC_SPEC_MAX_RETRIES", "5")),
     }
+    output_dir = os.environ.get("SNAPSPEC_OUTPUT_DIR", "results")
 
-    # Apply network latency via tc netem
     netem_delay = int(os.environ.get("SNAPSPEC_NETEM_DELAY_MS", "0"))
     apply_netem(netem_delay)
 
-    print(f"=== SnapSpec Distributed Experiment ===")
+    print("=== SnapSpec Distributed Experiment ===")
     print(f"Nodes: {num_nodes} ({', '.join(f'{c['host']}:{c['port']}' for c in node_configs)})")
     print(f"Strategies: {', '.join(strategies)}")
     print(f"Duration: {cfg['duration_s']}s, Interval: {cfg['snapshot_interval_s']}s")
     print(f"Write rate: {cfg['write_rate']}/s, Cross-node ratio: {cfg['cross_node_ratio']}")
     print(f"Netem delay: {netem_delay}ms")
+    print(f"Experiment: {cfg['experiment_name']}, Param: {cfg['param_name']}, Rep: {cfg['rep']}")
     print()
 
-    # Wait for all nodes to be reachable
     print("Waiting for nodes to be ready...")
     await wait_for_nodes(node_configs)
     print("All nodes ready.\n")
 
-    async def reset_nodes(per_node_balance: int):
-        """Send RESET to all nodes to restore initial state between runs."""
-        for cfg_item in node_configs:
-            conn = NodeConnection(
-                node_id=cfg_item["node_id"],
-                host=cfg_item["host"],
-                port=cfg_item["port"],
-            )
-            await conn.connect()
-            await conn.send_and_receive(MessageType.RESET, 0, balance=per_node_balance)
-            await conn.close()
-
-    # Run each strategy
     per_node_balance = total_tokens // num_nodes
     results = {}
+    csv_paths = []
     for i, strategy in enumerate(strategies):
         if i > 0:
             print("  Resetting nodes...", flush=True)
-            await reset_nodes(per_node_balance)
+            await reset_nodes(node_configs, per_node_balance)
         print(f"  [{strategy}] running...", end="", flush=True)
-        summary = await run_one(strategy, node_configs, cfg)
+        summary, metrics = await run_one(strategy, node_configs, cfg)
         results[strategy] = summary
         committed = int(summary["snapshot_committed"])
         total = int(summary["snapshot_count"])
         recovery = summary.get("recovery_rate", -1)
         recovery_str = f", recovery={recovery:.0%}" if recovery >= 0 else ""
-        print(f" done ({committed}/{total} committed{recovery_str})")
+
+        os.makedirs(output_dir, exist_ok=True)
+        _, config_name, param_name, rep = build_metrics_identity(strategy, cfg)
+        csv_path = os.path.join(
+            output_dir,
+            f"{cfg['experiment_name']}_{config_name}_{param_name}_rep{rep}.csv",
+        )
+        metrics.write_csv(csv_path)
+        csv_paths.append(csv_path)
+        print(f" done ({committed}/{total} committed{recovery_str}) -> {csv_path}")
 
     print()
     print_table(results)
+    print()
+    print("CSV outputs:")
+    for path in csv_paths:
+        print(f"  - {path}")
     print()
     print("=== Experiment Complete ===")
 

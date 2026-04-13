@@ -498,14 +498,16 @@ class StorageNode:
             # Discard any active snapshot
             if self.block_store.is_snapshot_active():
                 self.block_store.discard_snapshot()
-
-            # Reset block store
-            self.block_store._blocks = {}
-            if hasattr(self.block_store, '_archives'):
-                self.block_store._archives = {}
-            if hasattr(self.block_store, '_snapshot_blocks'):
-                self.block_store._snapshot_blocks = {}
-
+            # Reset block store. Prefer an explicit backend reset hook when present,
+            # then fall back to the mock backend's in-memory fields.
+            if hasattr(self.block_store, "reset"):
+                self.block_store.reset()
+            else:
+                self.block_store._blocks = {}
+                if hasattr(self.block_store, '_archives'):
+                    self.block_store._archives = {}
+                if hasattr(self.block_store, '_snapshot_blocks'):
+                    self.block_store._snapshot_blocks = {}
             # Reset node state
             self.state = NodeState.IDLE
             self._balance = new_balance
@@ -563,3 +565,5 @@ class StorageNode:
         MessageType.GET_SNAPSHOT_STATE.value: _handle_get_snapshot_state,
         MessageType.RESET.value: _handle_reset,
     }
+
+

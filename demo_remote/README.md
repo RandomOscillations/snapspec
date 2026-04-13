@@ -207,3 +207,72 @@ Once the 2-VM path is stable, extend to:
 - 3 worker VMs
 
 and reuse the same scripts with different node IDs and IP addresses.
+
+## Real C++ Backends On VMs
+
+The remote worker launcher now supports these backends:
+
+- `row`
+- `cow`
+- `fullcopy`
+- `sqlite`
+
+Build the C++ bindings on each worker VM first:
+
+```bash
+sudo apt update
+sudo apt install -y build-essential cmake python3-dev pybind11-dev
+cd ~/snapspec
+cmake -B build -S .
+cmake --build build
+```
+
+Start a worker VM with the real C++ ROW backend:
+
+```bash
+cd ~/snapspec
+source .venv/bin/activate
+python3 demo_remote/run_remote_node.py \
+  --node-id 0 \
+  --host 0.0.0.0 \
+  --port 9000 \
+  --block-store row \
+  --block-size 4096 \
+  --total-blocks 256 \
+  --data-dir /tmp/snapspec_data \
+  --archive-dir /tmp/snapspec_archives
+```
+
+You can replace `row` with `cow`, `fullcopy`, or `sqlite` for other backend checks.
+
+## Workload Generator On Real Nodes
+
+The workload generator already exists in:
+
+- `snapspec/workload/generator.py`
+
+For real-node runs, use the coordinator-side distributed runner instead of the
+single-node client helper. It connects to live remote nodes, starts the
+workload generator, runs the chosen strategy, and prints a summary table.
+
+Coordinator VM example:
+
+```bash
+cd ~/snapspec
+source .venv/bin/activate
+export SNAPSPEC_NODES=0:10.40.129.153:9000,1:10.40.129.154:9000,2:10.40.129.155:9000
+export SNAPSPEC_STRATEGY=speculative
+export SNAPSPEC_DURATION=15
+export SNAPSPEC_SNAPSHOT_INTERVAL=5
+export SNAPSPEC_WRITE_RATE=200
+export SNAPSPEC_CROSS_NODE_RATIO=0.10
+export SNAPSPEC_TOTAL_TOKENS=100000
+export SNAPSPEC_TOTAL_BLOCKS=256
+python3 experiments/run_distributed.py
+```
+
+For C3/C4/C5, switch only the strategy value:
+
+- `pause_and_snap`
+- `two_phase`
+- `speculative`

@@ -1,11 +1,12 @@
 import asyncio
 import base64
+import os
 
 from snapspec.network.protocol import MessageType, encode_message, read_message
 
-
-HOST = "10.40.129.153"  # Replace with the worker VM's internal VCL IP.
-PORT = 9000
+# This file contains a smoke-test client for sending messages to the remote server.
+HOST = os.environ.get("SNAPSPEC_REMOTE_HOST", "")
+PORT = int(os.environ.get("SNAPSPEC_REMOTE_PORT", "9000"))
 
 
 async def send(msg_type, ts, **kwargs):
@@ -19,6 +20,9 @@ async def send(msg_type, ts, **kwargs):
 
 
 async def main():
+    if not HOST:
+        raise RuntimeError("Set SNAPSPEC_REMOTE_HOST to the worker VM's internal IP before running this client.")
+
     payload = base64.b64encode(b"hello".ljust(4096, b"\x00")).decode("ascii")
 
     resp = await send(

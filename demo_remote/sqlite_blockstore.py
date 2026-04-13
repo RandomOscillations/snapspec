@@ -24,7 +24,6 @@ class SQLiteBlockStore:
         self.conn.commit()
 
     def init(self, base_path: str, block_size: int, total_blocks: int):
-        # Kept for compatibility with the node server's block-store interface.
         pass
 
     def read(self, block_id: int) -> bytes:
@@ -118,6 +117,28 @@ class SQLiteBlockStore:
 
     def get_write_log(self):
         return list(self.write_log)
+
+    def get_archived_blocks(self, archive_path: str) -> dict[int, bytes] | None:
+        if not os.path.exists(archive_path):
+            return None
+
+        conn = sqlite3.connect(archive_path)
+        try:
+            cur = conn.execute("SELECT key, value FROM balances")
+            return {int(key): value for key, value in cur.fetchall()}
+        finally:
+            conn.close()
+
+    def reset(self):
+        self.conn.execute("DELETE FROM balances")
+        self.conn.commit()
+
+        if self.snapshot_active:
+            self.discard_snapshot()
+        self.snapshot_active = False
+        self.snapshot_ts = 0
+        self.snapshot_path = None
+        self.write_log = []
 
     def get_delta_block_count(self) -> int:
         return len(self.write_log)
