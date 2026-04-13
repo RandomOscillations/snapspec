@@ -92,7 +92,15 @@ async def wait_for_nodes(node_configs: list[dict], timeout: float = 30.0):
                 await asyncio.sleep(0.5)
 
 
-async def reset_nodes(node_configs: list[dict], per_node_balance: int):
+def compute_node_balances(total_tokens: int, num_nodes: int) -> list[int]:
+    """Split the known token total across nodes, preserving the remainder."""
+    per_node = total_tokens // num_nodes
+    balances = [per_node] * num_nodes
+    balances[0] += total_tokens - per_node * num_nodes
+    return balances
+
+
+async def reset_nodes(node_configs: list[dict], balances: list[int]):
     for cfg_item in node_configs:
         conn = NodeConnection(
             node_id=cfg_item["node_id"],
@@ -100,7 +108,11 @@ async def reset_nodes(node_configs: list[dict], per_node_balance: int):
             port=cfg_item["port"],
         )
         await conn.connect()
-        await conn.send_and_receive(MessageType.RESET, 0, balance=per_node_balance)
+        await conn.send_and_receive(
+            MessageType.RESET,
+            0,
+            balance=balances[cfg_item["node_id"]],
+        )
         await conn.close()
 
 
@@ -241,13 +253,16 @@ async def main():
     await wait_for_nodes(node_configs)
     print("All nodes ready.\n")
 
-    per_node_balance = total_tokens // num_nodes
+    balances = compute_node_balances(total_tokens, num_nodes)
+    print(f"Resetting nodes to balances: {balances}")
+    await reset_nodes(node_configs, balances)
+
     results = {}
     csv_paths = []
     for i, strategy in enumerate(strategies):
         if i > 0:
             print("  Resetting nodes...", flush=True)
-            await reset_nodes(node_configs, per_node_balance)
+            await reset_nodes(node_configs, balances)
         print(f"  [{strategy}] running...", end="", flush=True)
         summary, metrics = await run_one(strategy, node_configs, cfg)
         results[strategy] = summary
