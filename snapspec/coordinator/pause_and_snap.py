@@ -14,6 +14,7 @@ This is the simplest strategy and should be implemented/tested first.
 """
 
 from __future__ import annotations
+import logging
 from typing import TYPE_CHECKING
 
 from .strategy_interface import SnapshotResult
@@ -21,6 +22,9 @@ from ..validation.conservation import validate_conservation
 
 if TYPE_CHECKING:
     from .strategy_interface import CoordinatorProtocol
+
+
+logger = logging.getLogger(__name__)
 
 
 # Message type constants — must match Person B's protocol.MessageType values
@@ -68,6 +72,14 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             snapshot_balances, [], coordinator.transfer_amounts, coordinator.expected_total,
         )
         conservation_ok = cons.valid
+        if not cons.valid:
+            logger.warning(
+                "Pause-and-snap conservation failed at ts=%d: %s | balances=%s | in_transit_tags=%s",
+                ts,
+                cons.detail,
+                snapshot_balances,
+                cons.in_transit_tags[:10],
+            )
 
     # Phase 4: Commit — snapshot is consistent by construction
     await coordinator.send_all(_COMMIT, ts)

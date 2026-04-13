@@ -19,6 +19,7 @@ the "discard is free" claim.
 
 from __future__ import annotations
 import asyncio
+import logging
 from typing import TYPE_CHECKING
 
 from .strategy_interface import SnapshotResult
@@ -27,6 +28,9 @@ from ..validation.conservation import validate_conservation
 
 if TYPE_CHECKING:
     from .strategy_interface import CoordinatorProtocol
+
+
+logger = logging.getLogger(__name__)
 
 
 _SNAP_NOW = "SNAP_NOW"
@@ -98,6 +102,15 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                     coordinator.transfer_amounts, coordinator.expected_total,
                 )
                 conservation_ok = cons.valid
+                if not cons.valid:
+                    logger.warning(
+                        "Speculative conservation failed at ts=%d attempt=%d: %s | balances=%s | in_transit_tags=%s",
+                        attempt_ts,
+                        attempt,
+                        cons.detail,
+                        snapshot_balances,
+                        cons.in_transit_tags[:10],
+                    )
 
             # Verify recovery if enabled
             recovery_verified = None
