@@ -466,7 +466,6 @@ class StorageNode:
 
     async def _handle_get_write_log(self, msg: dict, writer: asyncio.StreamWriter):
         ts = msg["logical_timestamp"]
-        max_ts = msg.get("max_timestamp", ts)
 
         async with self._state_lock:
             raw_log = self.block_store.get_write_log()
@@ -480,7 +479,6 @@ class StorageNode:
                 "partner_node_id": e.partner_node_id,
             }
             for e in raw_log
-            if e.timestamp <= max_ts
         ]
 
         # Return snapshot-time balance if available, otherwise live balance

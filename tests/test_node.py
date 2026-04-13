@@ -267,19 +267,17 @@ class TestWriteLog:
             )
             assert resp["type"] == "READY"
 
-            # Write with dependency info (ts <= snapshot_ts so it should be logged)
+            # Write with dependency info after the snapshot boundary.
             data_b64 = base64.b64encode(b"\x01" * 64).decode("ascii")
             resp = await conn.send_and_receive(
-                MessageType.WRITE, 5,
+                MessageType.WRITE, 11,
                 block_id=0, data=data_b64,
                 dep_tag=42, role="CAUSE", partner=1,
             )
             assert resp["type"] == "WRITE_ACK"
 
             # Get write log
-            resp = await conn.send_and_receive(
-                MessageType.GET_WRITE_LOG, 10, max_timestamp=10,
-            )
+            resp = await conn.send_and_receive(MessageType.GET_WRITE_LOG, 12)
             assert resp["type"] == "WRITE_LOG"
             entries = resp["entries"]
             assert len(entries) == 1
@@ -297,38 +295,37 @@ class TestWriteLog:
             await node.stop()
 
     @pytest.mark.asyncio
-    async def test_write_log_filtered_by_max_timestamp(self, block_store):
+    async def test_get_write_log_omits_pre_snapshot_writes(self, block_store):
         node = await _start_node(block_store)
         try:
             conn = await _connect(node)
+
+            # Pre-snapshot write should be part of the snapshot image, not the log.
+            data_b64 = base64.b64encode(b"\x01" * 64).decode("ascii")
+            await conn.send_and_receive(
+                MessageType.WRITE, 5,
+                block_id=0, data=data_b64, dep_tag=1, role="CAUSE", partner=1,
+            )
 
             resp = await conn.send_and_receive(
                 MessageType.PREPARE, 20, snapshot_ts=20,
             )
             assert resp["type"] == "READY"
 
-            # Write at ts=5 (within window, should be logged)
-            data_b64 = base64.b64encode(b"\x01" * 64).decode("ascii")
+            # Only post-snapshot writes belong in the write log.
             await conn.send_and_receive(
-                MessageType.WRITE, 5,
-                block_id=0, data=data_b64, dep_tag=1, role="CAUSE", partner=1,
-            )
-            # Write at ts=15 (within window, should be logged)
-            await conn.send_and_receive(
-                MessageType.WRITE, 15,
+                MessageType.WRITE, 21,
                 block_id=1, data=data_b64, dep_tag=2, role="EFFECT", partner=0,
             )
 
-            # Request with max_timestamp=10 — should only get the ts=5 entry
-            resp = await conn.send_and_receive(
-                MessageType.GET_WRITE_LOG, 20, max_timestamp=10,
-            )
+            resp = await conn.send_and_receive(MessageType.GET_WRITE_LOG, 22)
             entries = resp["entries"]
             assert len(entries) == 1
-            assert entries[0]["dependency_tag"] == 1
+            assert entries[0]["dependency_tag"] == 2
+            assert entries[0]["timestamp"] == 21
 
             # Clean up
-            await conn.send_and_receive(MessageType.ABORT, 21)
+            await conn.send_and_receive(MessageType.ABORT, 23)
             await conn.close()
         finally:
             await node.stop()

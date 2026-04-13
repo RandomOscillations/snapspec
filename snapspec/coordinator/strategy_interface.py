@@ -55,8 +55,9 @@ class CoordinatorProtocol(Protocol):
     async def collect_write_logs_parallel(self, ts: int) -> list[list[dict[str, Any]]]:
         """Collect write logs from all nodes in parallel.
 
-        Sends GET_WRITE_LOG with snapshot_ts=ts. Each node returns only entries
-        with timestamp <= ts. Returns list-of-lists (one inner list per node).
+        Fetches each node's post-snapshot write log. The storage backend is
+        responsible for logging only writes that occur after snapshot creation.
+        Returns list-of-lists (one inner list per node).
 
         Each write log entry dict has keys:
           block_id, timestamp, dependency_tag, role ("CAUSE"|"EFFECT"|"NONE"), partner_node_id

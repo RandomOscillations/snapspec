@@ -123,9 +123,7 @@ class TestSnapshotTimeBalance:
             assert resp["type"] == "WRITE_ACK"
 
             # GET_WRITE_LOG should return snapshot-time balance (5000), not live (4900)
-            resp = await conn.send_and_receive(
-                MessageType.GET_WRITE_LOG, 3, max_timestamp=3
-            )
+            resp = await conn.send_and_receive(MessageType.GET_WRITE_LOG, 3)
             assert resp["type"] == "WRITE_LOG"
             assert resp["snapshot_balance"] == 5000
 
@@ -155,9 +153,7 @@ class TestSnapshotTimeBalance:
             )
 
             # GET_WRITE_LOG should return snapshot-time balance (3000), not live (3200)
-            resp = await conn.send_and_receive(
-                MessageType.GET_WRITE_LOG, 3, max_timestamp=3
-            )
+            resp = await conn.send_and_receive(MessageType.GET_WRITE_LOG, 3)
             assert resp["snapshot_balance"] == 3000
 
             await conn.send_and_receive(MessageType.COMMIT, 4)

@@ -160,9 +160,7 @@ class TestCrossNodeTransfer:
         # Collect write logs from all nodes
         all_entries = []
         for nid, c in coord_conn.items():
-            resp = await c.send_and_receive(
-                MessageType.GET_WRITE_LOG, 999999, max_timestamp=999999,
-            )
+            resp = await c.send_and_receive(MessageType.GET_WRITE_LOG, 999999)
             if resp and "entries" in resp:
                 all_entries.extend(resp["entries"])
             await c.send_and_receive(MessageType.ABORT, 999999)

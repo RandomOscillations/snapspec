@@ -118,16 +118,15 @@ class Coordinator:
     ) -> list[list[dict[str, Any]]]:
         """Collect write logs from all nodes in parallel.
 
-        Sends GET_WRITE_LOG with max_timestamp=ts. Returns list-of-lists,
-        one inner list per node (in node_configs order).
+        Returns each node's post-snapshot write log as maintained by the
+        storage backend. Since the backend only records writes that occur
+        after snapshot creation, no extra timestamp filtering is applied here.
         """
 
         async def _collect_one(conn: NodeConnection) -> list[dict]:
             try:
                 resp = await asyncio.wait_for(
-                    conn.send_and_receive(
-                        MessageType.GET_WRITE_LOG, ts, max_timestamp=ts,
-                    ),
+                    conn.send_and_receive(MessageType.GET_WRITE_LOG, ts),
                     timeout=self.validation_timeout_s,
                 )
                 if resp is None:
@@ -165,9 +164,7 @@ class Coordinator:
         async def _collect_one(conn: NodeConnection) -> tuple[list[dict], int]:
             try:
                 resp = await asyncio.wait_for(
-                    conn.send_and_receive(
-                        MessageType.GET_WRITE_LOG, ts, max_timestamp=ts,
-                    ),
+                    conn.send_and_receive(MessageType.GET_WRITE_LOG, ts),
                     timeout=self.validation_timeout_s,
                 )
                 if resp is None:
