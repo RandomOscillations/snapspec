@@ -1,10 +1,10 @@
-"""
-Distributed experiment runner — connects to pre-existing storage nodes.
+ï»¿"""
+Distributed experiment runner - connects to pre-existing storage nodes.
 
 Reads node addresses from SNAPSPEC_NODES env var (format: id:host:port,id:host:port,...).
 Runs coordinator + workload against separate remote nodes.
 
-This is the real distributed deployment path — no subprocess spawning.
+This is the real distributed deployment path - no subprocess spawning.
 """
 
 from __future__ import annotations
@@ -281,3 +281,4 @@ if __name__ == "__main__":
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
     asyncio.run(main())
+
