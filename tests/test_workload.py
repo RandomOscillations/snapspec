@@ -149,9 +149,9 @@ class TestCrossNodeTransfer:
             await c.connect()
             coord_conn[n.node_id] = c
 
-        # Create snapshot with high ts so all writes are logged
+        # Create snapshot with a low boundary so all subsequent writes are logged
         for nid, c in coord_conn.items():
-            await c.send_and_receive(MessageType.SNAP_NOW, 999999, snapshot_ts=999999)
+            await c.send_and_receive(MessageType.SNAP_NOW, 0, snapshot_ts=0)
 
         await wl.start()
         await asyncio.sleep(0.3)

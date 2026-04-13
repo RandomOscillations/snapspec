@@ -72,7 +72,7 @@ class MockBlockStore:
         self._blocks[block_id] = data
         if self._snapshot_active:
             self._delta_count += 1
-            if timestamp > 0 and timestamp <= self._snapshot_ts:
+            if timestamp > self._snapshot_ts:
                 self._write_log.append(_MockWriteLogEntry(
                     block_id=block_id,
                     timestamp=timestamp,

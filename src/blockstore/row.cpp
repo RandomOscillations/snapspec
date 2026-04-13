@@ -78,8 +78,8 @@ void ROWBlockStore::write(uint64_t block_id, const uint8_t* data,
             modified_blocks_.push_back(block_id);
         }
 
-        // Log if within snapshot window
-        if (timestamp <= snapshot_ts_ && timestamp > 0) {
+        // Log writes that occurred after the snapshot boundary.
+        if (timestamp > snapshot_ts_) {
             write_log_.push_back({block_id, timestamp, dep_tag, role, partner});
         }
     } else {

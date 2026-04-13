@@ -55,7 +55,7 @@ class SQLiteBlockStore:
         )
         self.conn.commit()
 
-        if self.snapshot_active and timestamp > 0 and timestamp <= self.snapshot_ts:
+        if self.snapshot_active and timestamp > self.snapshot_ts:
             self.write_log.append(
                 {
                     "block_id": block_id,
