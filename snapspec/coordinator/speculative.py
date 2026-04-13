@@ -73,6 +73,10 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                 await asyncio.sleep(_BACKOFF_BASE_S * (attempt + 1))
             continue
 
+        # Allow delayed post-snapshot effects to land before validation.
+        if coordinator.validation_grace_s > 0:
+            await asyncio.sleep(coordinator.validation_grace_s)
+
         # Step 2: Collect write logs + snapshot-time balances with deadline
         try:
             all_logs, snapshot_balances = await asyncio.wait_for(

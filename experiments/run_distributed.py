@@ -143,6 +143,7 @@ async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> tu
         on_snapshot_complete=metrics.on_snapshot_complete,
         total_blocks_per_node=cfg.get("total_blocks", 256),
         speculative_max_retries=int(cfg.get("speculative_max_retries", 5)),
+        validation_grace_s=float(cfg.get("validation_grace_s", 0.0)),
     )
     await coordinator.start()
 
@@ -235,6 +236,7 @@ async def main():
         "seed": int(os.environ.get("SNAPSPEC_SEED", "42")),
         "speculative_max_retries": int(os.environ.get("SNAPSPEC_SPEC_MAX_RETRIES", "5")),
         "effect_delay_s": float(os.environ.get("SNAPSPEC_EFFECT_DELAY_MS", "0")) / 1000.0,
+        "validation_grace_s": float(os.environ.get("SNAPSPEC_VALIDATION_DELAY_MS", "0")) / 1000.0,
     }
     output_dir = os.environ.get("SNAPSPEC_OUTPUT_DIR", "results")
 
@@ -248,6 +250,7 @@ async def main():
     print(f"Duration: {cfg['duration_s']}s, Interval: {cfg['snapshot_interval_s']}s")
     print(f"Write rate: {cfg['write_rate']}/s, Cross-node ratio: {cfg['cross_node_ratio']}")
     print(f"Cross-node effect delay: {cfg['effect_delay_s'] * 1000:.1f}ms")
+    print(f"Validation grace delay: {cfg['validation_grace_s'] * 1000:.1f}ms")
     print(f"Netem delay: {netem_delay}ms")
     print(f"Experiment: {cfg['experiment_name']}, Param: {cfg['param_name']}, Rep: {cfg['rep']}")
     print()

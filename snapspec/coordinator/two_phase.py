@@ -21,6 +21,7 @@ Brief pause at commit time: one RTT for COMMIT + ACK.
 """
 
 from __future__ import annotations
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -58,7 +59,11 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
         await coordinator.send_all(_ABORT, ts)
         return SnapshotResult(success=False, causal_consistent=False)
 
-    # Collect write logs + snapshot-time balances in parallel (bounded by ts)
+    # Allow delayed post-snapshot effects to land before validation.
+    if coordinator.validation_grace_s > 0:
+        await asyncio.sleep(coordinator.validation_grace_s)
+
+    # Collect write logs + snapshot-time balances in parallel.
     all_logs, snapshot_balances = await coordinator.collect_write_logs_and_balances_parallel(ts)
 
     # Validate causal consistency

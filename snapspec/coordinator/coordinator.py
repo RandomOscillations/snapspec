@@ -48,6 +48,7 @@ class Coordinator:
         snapshot_interval_s: float = 10.0,
         speculative_max_retries: int = 5,
         validation_timeout_s: float = 5.0,
+        validation_grace_s: float = 0.0,
         delta_size_threshold_frac: float = 0.1,
         total_blocks_per_node: int = 4096,
         on_snapshot_complete: Callable | None = None,
@@ -59,6 +60,7 @@ class Coordinator:
         # CoordinatorProtocol required config attributes
         self.speculative_max_retries = speculative_max_retries
         self.validation_timeout_s = validation_timeout_s
+        self.validation_grace_s = validation_grace_s
         self.delta_size_threshold_frac = delta_size_threshold_frac
         self.total_blocks_per_node = total_blocks_per_node
 

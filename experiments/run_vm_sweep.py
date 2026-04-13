@@ -52,6 +52,12 @@ def parse_args() -> argparse.Namespace:
         default=0.0,
         help="Delay between debit and credit halves of a cross-node transfer",
     )
+    parser.add_argument(
+        "--validation-delay-ms",
+        type=float,
+        default=0.0,
+        help="Delay before collecting post-snapshot write logs for validation",
+    )
     parser.add_argument("--rep", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
@@ -142,6 +148,7 @@ def main() -> int:
             "SNAPSPEC_TOTAL_TOKENS": str(args.total_tokens),
             "SNAPSPEC_TOTAL_BLOCKS": str(args.total_blocks),
             "SNAPSPEC_EFFECT_DELAY_MS": str(args.effect_delay_ms),
+            "SNAPSPEC_VALIDATION_DELAY_MS": str(args.validation_delay_ms),
             "SNAPSPEC_CONFIG_PREFIX": "row",
             "SNAPSPEC_REP": str(args.rep),
             "SNAPSPEC_SEED": str(args.seed),
