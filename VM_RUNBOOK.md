@@ -479,7 +479,96 @@ Save these for slides / professor discussion:
 - challenge list above
 - exact branch and commit used during the run
 
-## 16. Useful Paths
+## 16. Docker Container Path
+
+You can also run the same distributed setup in Docker containers instead of VMs.
+
+This container path now mirrors the VM flow:
+
+- 3 worker nodes
+- `row` backend by default
+- coordinator runs `experiments/run_distributed.py`
+- same environment variables as the VM path
+- same stress knobs, including:
+  - `SNAPSPEC_EFFECT_DELAY_MS`
+  - `SNAPSPEC_VALIDATION_DELAY_MS`
+
+Important files:
+
+- `docker/Dockerfile`
+- `docker/docker-compose.yml`
+- `docker/run.sh`
+- `docker/run_sweep.sh`
+
+### Run one distributed experiment in Docker
+
+From the repo root:
+
+```bash
+./docker/run.sh
+```
+
+Run just one strategy:
+
+```bash
+./docker/run.sh two_phase
+./docker/run.sh speculative
+```
+
+Run a stressed debug case:
+
+```bash
+SNAPSPEC_EXPERIMENT=debug_conservation \
+SNAPSPEC_CONFIG_PREFIX=row \
+SNAPSPEC_PARAM_VALUE=0.20 \
+SNAPSPEC_DURATION=20 \
+SNAPSPEC_SNAPSHOT_INTERVAL=1 \
+SNAPSPEC_WRITE_RATE=350 \
+SNAPSPEC_CROSS_NODE_RATIO=0.20 \
+SNAPSPEC_EFFECT_DELAY_MS=25 \
+SNAPSPEC_VALIDATION_DELAY_MS=50 \
+SNAPSPEC_TOTAL_TOKENS=100000 \
+SNAPSPEC_TOTAL_BLOCKS=256 \
+./docker/run.sh speculative
+```
+
+### Run a sweep in Docker
+
+Dependency sweep:
+
+```bash
+./docker/run_sweep.sh \
+  --experiment dependency \
+  --duration 20 \
+  --write-rate 350 \
+  --snapshot-interval 1 \
+  --effect-delay-ms 25 \
+  --validation-delay-ms 50 \
+  --total-tokens 100000 \
+  --total-blocks 256 \
+  --strategies two_phase speculative
+```
+
+Frequency sweep:
+
+```bash
+./docker/run_sweep.sh \
+  --experiment frequency \
+  --duration 15 \
+  --write-rate 200 \
+  --cross-node-ratio 0.10 \
+  --total-tokens 100000 \
+  --total-blocks 256
+```
+
+### Docker Notes
+
+- Results are written to the repo `results/` directory.
+- Worker container state is stored under `docker/state/`.
+- The Docker path is excellent for repeatable reruns and debugging.
+- The VM path is still the one to keep for "real multi-VM deployment" claims in slides and discussion.
+
+## 17. Useful Paths
 
 - `experiments/run_distributed.py`
 - `experiments/run_vm_sweep.py`
@@ -491,4 +580,3 @@ Save these for slides / professor discussion:
 - `snapspec/coordinator/speculative.py`
 - `snapspec/node/server.py`
 - `snapspec/validation/conservation.py`
-

@@ -5,9 +5,33 @@ services:
       dockerfile: docker/Dockerfile
     container_name: snapspec-node0
     hostname: node0
-    command: ["--id", "0", "--host", "0.0.0.0", "--port", "9000", "--block-store", "mock", "--balance", "25000"]
+    command:
+      - python
+      - -m
+      - demo_remote.run_remote_node
+      - --node-id
+      - "0"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "9000"
+      - --block-store
+      - ${SNAPSPEC_BLOCK_STORE:-row}
+      - --block-size
+      - ${SNAPSPEC_BLOCK_SIZE:-4096}
+      - --total-blocks
+      - ${SNAPSPEC_TOTAL_BLOCKS:-256}
+      - --data-dir
+      - /var/snapspec/data
+      - --archive-dir
+      - /var/snapspec/archives
+      - --initial-balance
+      - "33334"
     cap_add:
       - NET_ADMIN
+    volumes:
+      - ./state/node0/data:/var/snapspec/data
+      - ./state/node0/archives:/var/snapspec/archives
     networks:
       snapnet:
         ipv4_address: 10.10.0.10
@@ -18,9 +42,33 @@ services:
       dockerfile: docker/Dockerfile
     container_name: snapspec-node1
     hostname: node1
-    command: ["--id", "1", "--host", "0.0.0.0", "--port", "9000", "--block-store", "mock", "--balance", "25000"]
+    command:
+      - python
+      - -m
+      - demo_remote.run_remote_node
+      - --node-id
+      - "1"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "9000"
+      - --block-store
+      - ${SNAPSPEC_BLOCK_STORE:-row}
+      - --block-size
+      - ${SNAPSPEC_BLOCK_SIZE:-4096}
+      - --total-blocks
+      - ${SNAPSPEC_TOTAL_BLOCKS:-256}
+      - --data-dir
+      - /var/snapspec/data
+      - --archive-dir
+      - /var/snapspec/archives
+      - --initial-balance
+      - "33333"
     cap_add:
       - NET_ADMIN
+    volumes:
+      - ./state/node1/data:/var/snapspec/data
+      - ./state/node1/archives:/var/snapspec/archives
     networks:
       snapnet:
         ipv4_address: 10.10.0.11
@@ -31,49 +79,72 @@ services:
       dockerfile: docker/Dockerfile
     container_name: snapspec-node2
     hostname: node2
-    command: ["--id", "2", "--host", "0.0.0.0", "--port", "9000", "--block-store", "mock", "--balance", "25000"]
+    command:
+      - python
+      - -m
+      - demo_remote.run_remote_node
+      - --node-id
+      - "2"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "9000"
+      - --block-store
+      - ${SNAPSPEC_BLOCK_STORE:-row}
+      - --block-size
+      - ${SNAPSPEC_BLOCK_SIZE:-4096}
+      - --total-blocks
+      - ${SNAPSPEC_TOTAL_BLOCKS:-256}
+      - --data-dir
+      - /var/snapspec/data
+      - --archive-dir
+      - /var/snapspec/archives
+      - --initial-balance
+      - "33333"
     cap_add:
       - NET_ADMIN
+    volumes:
+      - ./state/node2/data:/var/snapspec/data
+      - ./state/node2/archives:/var/snapspec/archives
     networks:
       snapnet:
         ipv4_address: 10.10.0.12
-
-  node3:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    container_name: snapspec-node3
-    hostname: node3
-    command: ["--id", "3", "--host", "0.0.0.0", "--port", "9000", "--block-store", "mock", "--balance", "25000"]
-    cap_add:
-      - NET_ADMIN
-    networks:
-      snapnet:
-        ipv4_address: 10.10.0.13
 
   coordinator:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    container_name: snapspec-coordinator
     hostname: coordinator
-    entrypoint: ["python", "experiments/run_distributed.py"]
+    command:
+      - python
+      - experiments/run_distributed.py
     environment:
-      - SNAPSPEC_NODES=0:node0:9000,1:node1:9000,2:node2:9000,3:node3:9000
-      - SNAPSPEC_STRATEGY=pause_and_snap
-      - SNAPSPEC_DURATION=15
-      - SNAPSPEC_SNAPSHOT_INTERVAL=1.0
-      - SNAPSPEC_WRITE_RATE=200
-      - SNAPSPEC_CROSS_NODE_RATIO=0.4
-      - SNAPSPEC_TOTAL_TOKENS=100000
-      - SNAPSPEC_NETEM_DELAY_MS=2
+      SNAPSPEC_NODES: 0:node0:9000,1:node1:9000,2:node2:9000
+      SNAPSPEC_STRATEGY: ${SNAPSPEC_STRATEGY:-all}
+      SNAPSPEC_EXPERIMENT: ${SNAPSPEC_EXPERIMENT:-docker_distributed}
+      SNAPSPEC_CONFIG_PREFIX: ${SNAPSPEC_CONFIG_PREFIX:-row}
+      SNAPSPEC_PARAM_VALUE: ${SNAPSPEC_PARAM_VALUE:-default}
+      SNAPSPEC_REP: ${SNAPSPEC_REP:-1}
+      SNAPSPEC_OUTPUT_DIR: /app/results
+      SNAPSPEC_DURATION: ${SNAPSPEC_DURATION:-15}
+      SNAPSPEC_SNAPSHOT_INTERVAL: ${SNAPSPEC_SNAPSHOT_INTERVAL:-5}
+      SNAPSPEC_WRITE_RATE: ${SNAPSPEC_WRITE_RATE:-200}
+      SNAPSPEC_CROSS_NODE_RATIO: ${SNAPSPEC_CROSS_NODE_RATIO:-0.10}
+      SNAPSPEC_EFFECT_DELAY_MS: ${SNAPSPEC_EFFECT_DELAY_MS:-0}
+      SNAPSPEC_VALIDATION_DELAY_MS: ${SNAPSPEC_VALIDATION_DELAY_MS:-0}
+      SNAPSPEC_TOTAL_TOKENS: ${SNAPSPEC_TOTAL_TOKENS:-100000}
+      SNAPSPEC_TOTAL_BLOCKS: ${SNAPSPEC_TOTAL_BLOCKS:-256}
+      SNAPSPEC_SEED: ${SNAPSPEC_SEED:-42}
+      SNAPSPEC_SPEC_MAX_RETRIES: ${SNAPSPEC_SPEC_MAX_RETRIES:-5}
+      SNAPSPEC_NETEM_DELAY_MS: ${SNAPSPEC_NETEM_DELAY_MS:-0}
     cap_add:
       - NET_ADMIN
     depends_on:
       - node0
       - node1
       - node2
-      - node3
+    volumes:
+      - ../results:/app/results
     networks:
       snapnet:
         ipv4_address: 10.10.0.100
