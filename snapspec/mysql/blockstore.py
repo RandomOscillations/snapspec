@@ -113,8 +113,10 @@ class MySQLBlockStore:
 
     async def init_schema(self):
         """Create tables if they do not yet exist."""
+        import warnings as _warnings
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:
+                await cur.execute("SET SESSION sql_notes = 0")
                 await cur.execute("""
                     CREATE TABLE IF NOT EXISTS accounts (
                         id      INT    PRIMARY KEY,
@@ -128,6 +130,20 @@ class MySQLBlockStore:
                         balance     BIGINT    NOT NULL,
                         archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         PRIMARY KEY (snapshot_ts, account_id)
+                    ) ENGINE=InnoDB
+                """)
+                await cur.execute("""
+                    CREATE TABLE IF NOT EXISTS transactions (
+                        id           BIGINT     AUTO_INCREMENT PRIMARY KEY,
+                        dep_tag      BIGINT     NOT NULL DEFAULT 0,
+                        account_id   INT        NOT NULL,
+                        partner_node INT        NOT NULL DEFAULT -1,
+                        role         VARCHAR(8) NOT NULL DEFAULT 'LOCAL',
+                        amount       BIGINT     NOT NULL DEFAULT 0,
+                        logical_ts   BIGINT     NOT NULL,
+                        committed_at TIMESTAMP  DEFAULT CURRENT_TIMESTAMP,
+                        INDEX idx_dep_tag (dep_tag),
+                        INDEX idx_logical_ts (logical_ts)
                     ) ENGINE=InnoDB
                 """)
 
@@ -198,6 +214,49 @@ class MySQLBlockStore:
                         "(snapshot_ts, account_id, balance) VALUES (%s, %s, %s)",
                         (snapshot_ts, account_id, balance),
                     )
+
+    async def insert_transaction_async(
+        self,
+        dep_tag: int,
+        account_id: int,
+        partner_node: int,
+        role: str,
+        amount: int,
+        logical_ts: int,
+    ):
+        """Record a transfer leg in the transactions table.
+
+        Each cross-node transfer produces two rows (one CAUSE on the source
+        node, one EFFECT on the destination node) with the same dep_tag so
+        the pair can be reconstructed by querying across nodes.
+
+        No-ops silently if the pool was closed during node shutdown (a write
+        handler can be in-flight when stop() is called).
+        """
+        if self.pool is None:
+            return
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "INSERT INTO transactions "
+                    "(dep_tag, account_id, partner_node, role, amount, logical_ts) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (dep_tag, account_id, partner_node, role, amount, logical_ts),
+                )
+
+    async def reset_async(self, total_per_node: int):
+        """Clear per-run tables and re-seed account balances.
+
+        Calls init_schema first so this is safe on fresh containers where
+        the tables may not exist yet. Called by the sweep script between
+        runs so each strategy starts from an identical, clean state.
+        """
+        await self.init_schema()
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("TRUNCATE TABLE transactions")
+                await cur.execute("TRUNCATE TABLE snapshot_archive")
+        await self.seed_balance(total_per_node)
 
     # ── Sync BlockStore interface (matches MockBlockStore exactly) ────────
 

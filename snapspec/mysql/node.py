@@ -121,6 +121,14 @@ class MySQLStorageNode(StorageNode):
             # 1. Persist balance change to MySQL atomically.
             if balance_delta != 0:
                 await self._mysql_bs.update_balance_async(block_id, balance_delta)
+                await self._mysql_bs.insert_transaction_async(
+                    dep_tag=dep_tag,
+                    account_id=block_id % self._mysql_bs._num_accounts,
+                    partner_node=partner,
+                    role=role_str,
+                    amount=balance_delta,
+                    logical_ts=ts,
+                )
                 self._balance += balance_delta  # keep in-memory replica in sync
 
             # 2. Track write in the in-memory write log for causal validation.
