@@ -97,6 +97,14 @@ class MySQLStorageNode(StorageNode):
 
             if balance_delta != 0:
                 await self._mysql_bs.update_balance_async(block_id, balance_delta)
+                await self._mysql_bs.insert_transaction_async(
+                    dep_tag=dep_tag,
+                    account_id=block_id % self._mysql_bs.get_total_blocks(),
+                    partner_node=partner,
+                    role=role_str,
+                    amount=balance_delta,
+                    logical_ts=ts,
+                )
                 self._balance += balance_delta
 
             self._mysql_bs.write(

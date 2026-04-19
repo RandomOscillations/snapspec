@@ -92,6 +92,22 @@ class MySQLBlockStore:
                     ) ENGINE=InnoDB
                     """
                 )
+                await cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS transactions (
+                        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                        dep_tag BIGINT NOT NULL DEFAULT 0,
+                        account_id INT NOT NULL,
+                        partner_node INT NOT NULL DEFAULT -1,
+                        role VARCHAR(8) NOT NULL DEFAULT 'LOCAL',
+                        amount BIGINT NOT NULL DEFAULT 0,
+                        logical_ts BIGINT NOT NULL,
+                        committed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        INDEX idx_dep_tag (dep_tag),
+                        INDEX idx_logical_ts (logical_ts)
+                    ) ENGINE=InnoDB
+                    """
+                )
 
     async def seed_balance(self, total_per_node: int):
         per_account = total_per_node // self._num_accounts
@@ -109,9 +125,43 @@ class MySQLBlockStore:
     async def reset_balances(self, total_per_node: int):
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:
+                await cur.execute("DELETE FROM transactions")
                 await cur.execute("DELETE FROM snapshot_archive")
                 await cur.execute("DELETE FROM accounts")
         await self.seed_balance(total_per_node)
+
+    async def insert_transaction_async(
+        self,
+        dep_tag: int,
+        account_id: int,
+        partner_node: int,
+        role: str,
+        amount: int,
+        logical_ts: int,
+    ):
+        """Record a transfer leg so MySQL-backed runs keep the audit trail.
+
+        The row is useful for direct DB inspection and parity with the original
+        mysql-integration branch. We silently no-op if shutdown already closed
+        the pool while a write handler is unwinding.
+        """
+        if self.pool is None:
+            return
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    INSERT INTO transactions
+                    (dep_tag, account_id, partner_node, role, amount, logical_ts)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (dep_tag, account_id, partner_node, role, amount, logical_ts),
+                )
+
+    async def reset_async(self, total_per_node: int):
+        """Compatibility helper retained from mysql-integration."""
+        await self.init_schema()
+        await self.reset_balances(total_per_node)
 
     async def update_balance_async(self, block_id: int, delta: int):
         account_id = block_id % self._num_accounts
