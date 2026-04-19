@@ -67,6 +67,9 @@ class TestCoordinatorLifecycle:
             coord = Coordinator(configs, _simple_strategy)
             await coord.start()
             assert len(coord._connections) == NUM_NODES
+            assert coord.get_healthy_nodes() == {0, 1, 2}
+            assert coord._health_task is not None
+            assert not coord._health_task.done()
             await coord.stop()
         finally:
             await _stop_nodes(nodes)
@@ -96,6 +99,66 @@ class TestBroadcast:
             responses = await coord.send_all("PING", ts)
             assert len(responses) == NUM_NODES
             assert all(r["type"] == "PONG" for r in responses)
+
+            await coord.stop()
+        finally:
+            await _stop_nodes(nodes)
+
+    @pytest.mark.asyncio
+    async def test_send_all_times_out_unhealthy_node(self, nodes):
+        configs = await _start_nodes(nodes)
+        try:
+            coord = Coordinator(
+                configs,
+                _simple_strategy,
+                operation_timeout_s=0.05,
+            )
+            await coord.start()
+
+            async def _slow_send_and_receive(*args, **kwargs):
+                await asyncio.sleep(0.2)
+                return None
+
+            coord._connections[0].send_and_receive = _slow_send_and_receive
+
+            ts = coord.tick()
+            responses = await coord.send_all("PING", ts)
+            assert responses[0] is None
+            assert all(r["type"] == "PONG" for r in responses[1:])
+            assert 0 not in coord.get_healthy_nodes()
+
+            await coord.stop()
+        finally:
+            await _stop_nodes(nodes)
+
+
+class TestHealthChecks:
+    @pytest.mark.asyncio
+    async def test_health_check_marks_node_unhealthy_on_timeout(self, nodes):
+        configs = await _start_nodes(nodes)
+        try:
+            coord = Coordinator(
+                configs,
+                _simple_strategy,
+                operation_timeout_s=0.1,
+                health_check_interval_s=10.0,
+                health_check_timeout_s=0.05,
+                health_unhealthy_after_s=0.05,
+            )
+            await coord.start()
+
+            async def _slow_send_and_receive(*args, **kwargs):
+                await asyncio.sleep(0.2)
+                return None
+
+            coord._connections[1].send_and_receive = _slow_send_and_receive
+
+            await coord._run_health_check_round()
+
+            assert 1 not in coord.get_healthy_nodes()
+            assert coord._node_health[1]["healthy"] is False
+            assert coord._node_health[1]["last_error"] is not None
+            assert coord.get_healthy_nodes() == {0, 2}
 
             await coord.stop()
         finally:

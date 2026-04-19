@@ -23,7 +23,7 @@ COPY experiments/ experiments/
 COPY demo_remote/ demo_remote/
 COPY docker/ docker/
 
-RUN pip install --no-cache-dir pyyaml pytest pytest-asyncio
+RUN pip install --no-cache-dir pyyaml pytest pytest-asyncio aiomysql
 RUN cmake -B build -S . -DSNAPSPEC_BUILD_TESTS=OFF && \
     cmake --build build --target _blockstore -j
 

@@ -46,30 +46,67 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     Returns:
         SnapshotResult with success=True if snapshot committed, False if aborted.
     """
+    participant_node_ids = coordinator.get_snapshot_participants()
+    if len(participant_node_ids) < coordinator.minimum_snapshot_nodes():
+        return SnapshotResult(
+            success=False,
+            skipped=True,
+            participant_node_ids=participant_node_ids,
+            failure_reason="insufficient_healthy_nodes",
+        )
+
     # Phase 1: Pause all writes on all nodes
-    responses = await coordinator.send_all(_PAUSE, ts)
+    responses = await coordinator.send_all(_PAUSE, ts, node_ids=participant_node_ids)
     if not _all_responded_with(responses, _PAUSED):
         # Some node failed to pause — resume everyone and abort
-        await coordinator.send_all(_RESUME, ts)
-        return SnapshotResult(success=False)
+        await coordinator.send_all(_RESUME, ts, node_ids=participant_node_ids)
+        return SnapshotResult(
+            success=False,
+            participant_node_ids=participant_node_ids,
+            failure_reason="pause_failed",
+        )
 
     # Phase 2: Take snapshot on all nodes (writes are paused, so this is safe)
-    responses = await coordinator.send_all(_SNAP_NOW, ts, snapshot_ts=ts)
+    responses = await coordinator.send_all(
+        _SNAP_NOW, ts, node_ids=participant_node_ids, snapshot_ts=ts
+    )
     if not _all_responded_with(responses, _SNAPPED):
         # Snapshot failed on some node — resume and abort
-        await coordinator.send_all(_RESUME, ts)
-        return SnapshotResult(success=False)
+        await coordinator.send_all(_RESUME, ts, node_ids=participant_node_ids)
+        return SnapshotResult(
+            success=False,
+            participant_node_ids=participant_node_ids,
+            failure_reason="snap_failed",
+        )
 
     # Phase 3: Collect logs + balances while writes are still paused.
     # Causal consistency is trivially guaranteed (no concurrent writes during snapshot).
     # We run conservation as an empirical baseline check.
-    _, snapshot_balances = await coordinator.collect_write_logs_and_balances_parallel(ts)
+    _, snapshot_balances, responding_node_ids = (
+        await coordinator.collect_write_logs_and_balances_parallel(
+            ts, node_ids=participant_node_ids
+        )
+    )
+    if len(responding_node_ids) < coordinator.minimum_snapshot_nodes():
+        await coordinator.send_all(_RESUME, ts, node_ids=participant_node_ids)
+        return SnapshotResult(
+            success=False,
+            participant_node_ids=responding_node_ids,
+            failure_reason="insufficient_participants_after_validation",
+        )
 
     conservation_ok: bool | None = None
     if coordinator.expected_total > 0:
         # Write log is empty (writes were paused), so no in-transit tokens.
+        adjusted_expected_total = coordinator.expected_total_for_participants(
+            responding_node_ids
+        )
         cons = validate_conservation(
-            snapshot_balances, [], coordinator.transfer_amounts, coordinator.expected_total,
+            snapshot_balances,
+            [],
+            coordinator.transfer_amounts,
+            adjusted_expected_total,
+            participating_node_ids=set(responding_node_ids),
         )
         conservation_ok = cons.valid
         if not cons.valid:
@@ -83,23 +120,24 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             )
 
     # Phase 4: Commit — snapshot is consistent by construction
-    await coordinator.send_all(_COMMIT, ts)
+    await coordinator.send_all(_COMMIT, ts, node_ids=responding_node_ids)
 
     # Phase 5: Resume writes
-    await coordinator.send_all(_RESUME, ts)
+    await coordinator.send_all(_RESUME, ts, node_ids=responding_node_ids)
 
     # Phase 6: Verify recovery if enabled
     recovery_verified = None
     recovery_balance_sum = None
     recovery_conservation = None
     if coordinator.expected_total > 0:
-        rv = await coordinator.verify_snapshot_recovery(ts)
+        rv = await coordinator.verify_snapshot_recovery(ts, node_ids=responding_node_ids)
         recovery_verified = rv["recovery_success"]
         recovery_balance_sum = rv["balance_sum"]
         recovery_conservation = rv.get("conservation_holds")
 
     return SnapshotResult(
         success=True,
+        participant_node_ids=responding_node_ids,
         causal_consistent=True,   # trivially true: no writes during snapshot
         causal_violation_count=0,
         conservation_holds=conservation_ok,

@@ -1,0 +1,1 @@
+"""MySQL-backed SnapSpec components."""

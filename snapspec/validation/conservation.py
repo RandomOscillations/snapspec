@@ -35,6 +35,7 @@ def validate_conservation(
     all_node_logs: list[list[dict]],
     transfer_amounts: dict[int, int],
     expected_total: int,
+    participating_node_ids: set[int] | None = None,
 ) -> ConservationResult:
     """Validate token conservation across a snapshot.
 
@@ -57,17 +58,29 @@ def validate_conservation(
     #
     # Build tag -> set of roles that are POST-snapshot (in the logs)
     tag_to_post_roles: dict[int, set[str]] = defaultdict(set)
+    skipped_tags: set[int] = set()
     for node_log in all_node_logs:
         for entry in node_log:
             tag = entry.get("dependency_tag", 0)
             role = entry.get("role", "NONE")
             if tag == 0 or role == "NONE":
                 continue
+            if participating_node_ids is not None:
+                node_id = entry.get("node_id")
+                partner_node_id = entry.get("partner_node_id")
+                if (
+                    node_id not in participating_node_ids
+                    or partner_node_id not in participating_node_ids
+                ):
+                    skipped_tags.add(tag)
+                    continue
             tag_to_post_roles[tag].add(role)
 
     in_transit_total = 0
     in_transit_tags: list[int] = []
     for tag, post_roles in tag_to_post_roles.items():
+        if tag in skipped_tags:
+            continue
         # In-transit: debit applied (CAUSE pre-snap, not in logs) but credit pending (EFFECT post-snap, in logs)
         # This means EFFECT is in post_roles but CAUSE is not
         if "EFFECT" in post_roles and "CAUSE" not in post_roles:

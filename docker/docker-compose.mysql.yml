@@ -1,9 +1,66 @@
 services:
+  mysql0:
+    image: mysql:8.0
+    container_name: snapspec-mysql0
+    hostname: mysql0
+    environment:
+      MYSQL_ROOT_PASSWORD: snapspec
+      MYSQL_DATABASE: snapspec_node_0
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-psnapspec"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    networks:
+      snapnet:
+        ipv4_address: 10.11.0.20
+
+  mysql1:
+    image: mysql:8.0
+    container_name: snapspec-mysql1
+    hostname: mysql1
+    environment:
+      MYSQL_ROOT_PASSWORD: snapspec
+      MYSQL_DATABASE: snapspec_node_1
+    ports:
+      - "3307:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-psnapspec"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    networks:
+      snapnet:
+        ipv4_address: 10.11.0.21
+
+  mysql2:
+    image: mysql:8.0
+    container_name: snapspec-mysql2
+    hostname: mysql2
+    environment:
+      MYSQL_ROOT_PASSWORD: snapspec
+      MYSQL_DATABASE: snapspec_node_2
+    ports:
+      - "3308:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-psnapspec"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    networks:
+      snapnet:
+        ipv4_address: 10.11.0.22
+
   node0:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    container_name: snapspec-node0
+    container_name: snapspec-node0-mysql
     hostname: node0
     command:
       - python
@@ -16,21 +73,27 @@ services:
       - --port
       - "9000"
       - --block-store
-      - ${SNAPSPEC_BLOCK_STORE:-row}
-      - --block-size
-      - ${SNAPSPEC_BLOCK_SIZE:-4096}
+      - mysql
       - --total-blocks
       - ${SNAPSPEC_TOTAL_BLOCKS:-256}
-      - --data-dir
-      - /var/snapspec/data
       - --archive-dir
       - /var/snapspec/archives
       - --initial-balance
       - "33334"
-    cap_add:
-      - NET_ADMIN
+      - --mysql-host
+      - mysql0
+      - --mysql-port
+      - "3306"
+      - --mysql-user
+      - root
+      - --mysql-password
+      - snapspec
+      - --mysql-database
+      - snapspec_node_0
+    depends_on:
+      mysql0:
+        condition: service_healthy
     volumes:
-      - ./state/node0/data:/var/snapspec/data
       - ./state/node0/archives:/var/snapspec/archives
       - ./logs:/var/snapspec/logs
     environment:
@@ -38,13 +101,13 @@ services:
       SNAPSPEC_LOG_PATH: /var/snapspec/logs/node0.log
     networks:
       snapnet:
-        ipv4_address: 10.10.0.10
+        ipv4_address: 10.11.0.10
 
   node1:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    container_name: snapspec-node1
+    container_name: snapspec-node1-mysql
     hostname: node1
     command:
       - python
@@ -57,21 +120,27 @@ services:
       - --port
       - "9000"
       - --block-store
-      - ${SNAPSPEC_BLOCK_STORE:-row}
-      - --block-size
-      - ${SNAPSPEC_BLOCK_SIZE:-4096}
+      - mysql
       - --total-blocks
       - ${SNAPSPEC_TOTAL_BLOCKS:-256}
-      - --data-dir
-      - /var/snapspec/data
       - --archive-dir
       - /var/snapspec/archives
       - --initial-balance
       - "33333"
-    cap_add:
-      - NET_ADMIN
+      - --mysql-host
+      - mysql1
+      - --mysql-port
+      - "3306"
+      - --mysql-user
+      - root
+      - --mysql-password
+      - snapspec
+      - --mysql-database
+      - snapspec_node_1
+    depends_on:
+      mysql1:
+        condition: service_healthy
     volumes:
-      - ./state/node1/data:/var/snapspec/data
       - ./state/node1/archives:/var/snapspec/archives
       - ./logs:/var/snapspec/logs
     environment:
@@ -79,13 +148,13 @@ services:
       SNAPSPEC_LOG_PATH: /var/snapspec/logs/node1.log
     networks:
       snapnet:
-        ipv4_address: 10.10.0.11
+        ipv4_address: 10.11.0.11
 
   node2:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    container_name: snapspec-node2
+    container_name: snapspec-node2-mysql
     hostname: node2
     command:
       - python
@@ -98,21 +167,27 @@ services:
       - --port
       - "9000"
       - --block-store
-      - ${SNAPSPEC_BLOCK_STORE:-row}
-      - --block-size
-      - ${SNAPSPEC_BLOCK_SIZE:-4096}
+      - mysql
       - --total-blocks
       - ${SNAPSPEC_TOTAL_BLOCKS:-256}
-      - --data-dir
-      - /var/snapspec/data
       - --archive-dir
       - /var/snapspec/archives
       - --initial-balance
       - "33333"
-    cap_add:
-      - NET_ADMIN
+      - --mysql-host
+      - mysql2
+      - --mysql-port
+      - "3306"
+      - --mysql-user
+      - root
+      - --mysql-password
+      - snapspec
+      - --mysql-database
+      - snapspec_node_2
+    depends_on:
+      mysql2:
+        condition: service_healthy
     volumes:
-      - ./state/node2/data:/var/snapspec/data
       - ./state/node2/archives:/var/snapspec/archives
       - ./logs:/var/snapspec/logs
     environment:
@@ -120,7 +195,7 @@ services:
       SNAPSPEC_LOG_PATH: /var/snapspec/logs/node2.log
     networks:
       snapnet:
-        ipv4_address: 10.10.0.12
+        ipv4_address: 10.11.0.12
 
   coordinator:
     build:
@@ -133,8 +208,8 @@ services:
     environment:
       SNAPSPEC_NODES: 0:node0:9000,1:node1:9000,2:node2:9000
       SNAPSPEC_STRATEGY: ${SNAPSPEC_STRATEGY:-all}
-      SNAPSPEC_EXPERIMENT: ${SNAPSPEC_EXPERIMENT:-docker_distributed}
-      SNAPSPEC_CONFIG_PREFIX: ${SNAPSPEC_CONFIG_PREFIX:-row}
+      SNAPSPEC_EXPERIMENT: ${SNAPSPEC_EXPERIMENT:-mysql_distributed}
+      SNAPSPEC_CONFIG_PREFIX: ${SNAPSPEC_CONFIG_PREFIX:-mysql}
       SNAPSPEC_PARAM_VALUE: ${SNAPSPEC_PARAM_VALUE:-default}
       SNAPSPEC_REP: ${SNAPSPEC_REP:-1}
       SNAPSPEC_OUTPUT_DIR: /app/results
@@ -148,16 +223,10 @@ services:
       SNAPSPEC_TOTAL_BLOCKS: ${SNAPSPEC_TOTAL_BLOCKS:-256}
       SNAPSPEC_SEED: ${SNAPSPEC_SEED:-42}
       SNAPSPEC_SPEC_MAX_RETRIES: ${SNAPSPEC_SPEC_MAX_RETRIES:-5}
-      SNAPSPEC_OPERATION_TIMEOUT_S: ${SNAPSPEC_OPERATION_TIMEOUT_S:-5.0}
-      SNAPSPEC_HEALTH_CHECK_INTERVAL_S: ${SNAPSPEC_HEALTH_CHECK_INTERVAL_S:-3.0}
-      SNAPSPEC_HEALTH_CHECK_TIMEOUT_S: ${SNAPSPEC_HEALTH_CHECK_TIMEOUT_S:-1.5}
-      SNAPSPEC_HEALTH_UNHEALTHY_AFTER_S: ${SNAPSPEC_HEALTH_UNHEALTHY_AFTER_S:-10.0}
       SNAPSPEC_STATUS_INTERVAL_S: ${SNAPSPEC_STATUS_INTERVAL_S:-5.0}
       SNAPSPEC_MIN_SNAPSHOT_NODES: ${SNAPSPEC_MIN_SNAPSHOT_NODES:-2}
       SNAPSPEC_NETEM_DELAY_MS: ${SNAPSPEC_NETEM_DELAY_MS:-0}
       SNAPSPEC_LOG_DIR: /app/logs
-    cap_add:
-      - NET_ADMIN
     depends_on:
       - node0
       - node1
@@ -167,11 +236,11 @@ services:
       - ./logs:/app/logs
     networks:
       snapnet:
-        ipv4_address: 10.10.0.100
+        ipv4_address: 10.11.0.100
 
 networks:
   snapnet:
     driver: bridge
     ipam:
       config:
-        - subnet: 10.10.0.0/24
+        - subnet: 10.11.0.0/24

@@ -20,12 +20,15 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
+import os
 import socket
 import time
 from enum import Enum
 from typing import Any
 
+from ..logging_utils import log_event
 from ..network.protocol import MessageType, encode_message, read_message
 
 logger = logging.getLogger(__name__)
@@ -187,6 +190,9 @@ class StorageNode:
         self.port = port
         self.block_store = block_store
         self.archive_dir = archive_dir
+        self._state_path = os.path.join(
+            self.archive_dir, f"node{self.node_id}_runtime_state.json"
+        )
 
         # State machine
         self.state = NodeState.IDLE
@@ -211,6 +217,8 @@ class StorageNode:
         # Server internals
         self._server: asyncio.Server | None = None
         self._connections: list[asyncio.StreamWriter] = []
+        self._stopping = False
+        self._component = f"node-{self.node_id}"
 
     @property
     def actual_port(self) -> int:
@@ -221,6 +229,8 @@ class StorageNode:
 
     async def start(self):
         """Start listening for TCP connections."""
+        os.makedirs(self.archive_dir, exist_ok=True)
+        self._load_runtime_state()
         self._server = await asyncio.start_server(
             self._handle_connection, self.host, self.port,
         )
@@ -229,18 +239,99 @@ class StorageNode:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
         actual = self.actual_port
-        logger.info("Node %d listening on %s:%d", self.node_id, self.host, actual)
+        log_event(
+            logger,
+            component=self._component,
+            event="node_start",
+            host=self.host,
+            port=actual,
+            state=self.state.value,
+            balance=self._balance,
+        )
 
     async def stop(self):
         """Gracefully shut down the server."""
+        self._stopping = True
         if self._server:
             self._server.close()
             await self._server.wait_closed()
-        for w in self._connections:
+        async with self._state_lock:
+            await self._cleanup_for_shutdown_locked(reason="local_stop")
+        waiters = []
+        for w in list(self._connections):
             if not w.is_closing():
                 w.close()
+                waiters.append(w.wait_closed())
+        if waiters:
+            await asyncio.gather(*waiters, return_exceptions=True)
         self._connections.clear()
-        logger.info("Node %d stopped", self.node_id)
+        log_event(
+            logger,
+            component=self._component,
+            event="node_stop",
+            state=self.state.value,
+            balance=self._balance,
+            total_writes=self.total_writes,
+        )
+
+    async def _cleanup_for_shutdown_locked(self, reason: str):
+        if self.block_store.is_snapshot_active():
+            delta_count = self.block_store.discard_snapshot()
+            self.delta_blocks_at_discard.append(delta_count)
+            log_event(
+                logger,
+                component=self._component,
+                event="shutdown_discard_snapshot",
+                snapshot_ts=self.snapshot_ts,
+                reason=reason,
+                delta_blocks=delta_count,
+            )
+        self._writes_paused = False
+        self.state = NodeState.IDLE
+        self._snapshot_balance = None
+        self.snapshot_ts = 0
+        self._persist_runtime_state()
+
+    def _load_runtime_state(self):
+        """Recover persisted balance/archive metadata after a process restart."""
+        if not os.path.exists(self._state_path):
+            return
+
+        try:
+            with open(self._state_path, "r", encoding="utf-8") as f:
+                state = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            logger.warning(
+                "Node %d: failed to read persisted runtime state from %s",
+                self.node_id, self._state_path,
+            )
+            return
+
+        self._balance = int(state.get("balance", self._balance))
+        archive_balances = state.get("archive_balances", {})
+        self._archive_balances = {
+            str(path): int(balance)
+            for path, balance in archive_balances.items()
+        }
+        log_event(
+            logger,
+            component=self._component,
+            event="state_restored",
+            balance=self._balance,
+            archived_snapshots=len(self._archive_balances),
+        )
+
+    def _persist_runtime_state(self):
+        """Persist the mutable token/accounting state needed after restart."""
+        os.makedirs(self.archive_dir, exist_ok=True)
+        state = {
+            "balance": self._balance,
+            "archive_balances": self._archive_balances,
+        }
+        tmp_path = f"{self._state_path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+        os.replace(tmp_path, self._state_path)
 
     async def _handle_connection(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -253,7 +344,17 @@ class StorageNode:
 
         self._connections.append(writer)
         peer = writer.get_extra_info("peername")
-        logger.debug("Node %d: new connection from %s", self.node_id, peer)
+        if self._stopping:
+            writer.close()
+            await writer.wait_closed()
+            return
+        log_event(
+            logger,
+            component=self._component,
+            event="connection_open",
+            level=logging.DEBUG,
+            peer=peer,
+        )
 
         try:
             while True:
@@ -275,12 +376,22 @@ class StorageNode:
                     logger.exception("Node %d: handler error for %s", self.node_id, msg_type)
                     await self._send_error(writer, msg, str(e))
         except (ConnectionResetError, BrokenPipeError):
-            logger.debug("Node %d: connection reset from %s", self.node_id, peer)
+            log_event(
+                logger,
+                component=self._component,
+                event="connection_reset",
+                level=logging.DEBUG,
+                peer=peer,
+            )
         finally:
             if writer in self._connections:
                 self._connections.remove(writer)
             if not writer.is_closing():
                 writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -330,8 +441,21 @@ class StorageNode:
             # Update token balance
             if "balance_delta" in msg:
                 self._balance += msg["balance_delta"]
+                self._persist_runtime_state()
 
         await self._send(writer, MessageType.WRITE_ACK, ts, block_id=block_id)
+        if dep_tag > 0 or self.total_writes <= 3 or self.total_writes % 250 == 0:
+            log_event(
+                logger,
+                component=self._component,
+                event="write",
+                block_id=block_id,
+                dep_tag=dep_tag,
+                role=role_str,
+                partner=partner,
+                balance=self._balance,
+                total_writes=self.total_writes,
+            )
 
     async def _handle_read(self, msg: dict, writer: asyncio.StreamWriter):
         ts = msg["logical_timestamp"]
@@ -362,7 +486,14 @@ class StorageNode:
             self.state = NodeState.PREPARED
             self.writes_during_snapshot = 0
 
-        logger.debug("Node %d: PREPARED at ts=%d", self.node_id, snapshot_ts)
+        log_event(
+            logger,
+            component=self._component,
+            event="snapshot_prepared",
+            snapshot_ts=snapshot_ts,
+            state=self.state.value,
+            snapshot_balance=self._snapshot_balance,
+        )
         await self._send(writer, MessageType.READY, ts, snapshot_ts=snapshot_ts)
 
     async def _handle_snap_now(self, msg: dict, writer: asyncio.StreamWriter):
@@ -383,7 +514,14 @@ class StorageNode:
             self.state = NodeState.SNAPPED
             self.writes_during_snapshot = 0
 
-        logger.debug("Node %d: SNAPPED at ts=%d", self.node_id, snapshot_ts)
+        log_event(
+            logger,
+            component=self._component,
+            event="snapshot_taken",
+            snapshot_ts=snapshot_ts,
+            state=self.state.value,
+            snapshot_balance=self._snapshot_balance,
+        )
         await self._send(writer, MessageType.SNAPPED, ts, snapshot_ts=snapshot_ts)
 
     async def _handle_pause(self, msg: dict, writer: asyncio.StreamWriter):
@@ -400,7 +538,12 @@ class StorageNode:
             self._writes_paused = True
             self.state = NodeState.PAUSED
 
-        logger.debug("Node %d: PAUSED", self.node_id)
+        log_event(
+            logger,
+            component=self._component,
+            event="writes_paused",
+            state=self.state.value,
+        )
         await self._send(writer, MessageType.PAUSED, ts)
 
     async def _handle_resume(self, msg: dict, writer: asyncio.StreamWriter):
@@ -418,7 +561,12 @@ class StorageNode:
             self._writes_paused = False
             self.state = NodeState.IDLE
 
-        logger.debug("Node %d: RESUMED", self.node_id)
+        log_event(
+            logger,
+            component=self._component,
+            event="writes_resumed",
+            state=self.state.value,
+        )
         await self._send(writer, MessageType.ACK, ts)
 
     async def _handle_commit(self, msg: dict, writer: asyncio.StreamWriter):
@@ -440,8 +588,16 @@ class StorageNode:
             self._writes_paused = False
             self.state = NodeState.IDLE
             self._snapshot_balance = None
+            self._persist_runtime_state()
 
-        logger.debug("Node %d: COMMITTED snapshot ts=%d", self.node_id, ts)
+        log_event(
+            logger,
+            component=self._component,
+            event="snapshot_committed",
+            snapshot_ts=self.snapshot_ts,
+            archive=archive_path,
+            balance=self._balance,
+        )
         await self._send(writer, MessageType.ACK, ts)
 
     async def _handle_abort(self, msg: dict, writer: asyncio.StreamWriter):
@@ -461,7 +617,13 @@ class StorageNode:
             self.state = NodeState.IDLE
             self._snapshot_balance = None
 
-        logger.debug("Node %d: ABORTED snapshot, delta_blocks=%d", self.node_id, delta_count)
+        log_event(
+            logger,
+            component=self._component,
+            event="snapshot_aborted",
+            snapshot_ts=self.snapshot_ts,
+            delta_blocks=delta_count,
+        )
         await self._send(writer, MessageType.ACK, ts, delta_blocks=delta_count)
 
     async def _handle_get_write_log(self, msg: dict, writer: asyncio.StreamWriter):
@@ -516,8 +678,14 @@ class StorageNode:
             self.total_writes = 0
             self.delta_blocks_at_discard = []
             self._archive_balances = {}
+            self._persist_runtime_state()
 
-        logger.info("Node %d: RESET (balance=%d)", self.node_id, new_balance)
+        log_event(
+            logger,
+            component=self._component,
+            event="node_reset",
+            balance=new_balance,
+        )
         await self._send(writer, MessageType.ACK, ts)
 
     async def _handle_get_snapshot_state(self, msg: dict, writer: asyncio.StreamWriter):
@@ -547,6 +715,22 @@ class StorageNode:
                          block_count=len(archived),
                          snapshot_balance=snapshot_balance)
 
+    async def _handle_shutdown(self, msg: dict, writer: asyncio.StreamWriter):
+        ts = msg["logical_timestamp"]
+
+        async with self._state_lock:
+            await self._cleanup_for_shutdown_locked(reason="remote_shutdown")
+
+        log_event(
+            logger,
+            component=self._component,
+            event="node_shutdown_requested",
+            state=self.state.value,
+            balance=self._balance,
+        )
+        await self._send(writer, MessageType.ACK, ts)
+        asyncio.create_task(self.stop())
+
     # ── Dispatch table ──────────────────────────────────────────────────
 
     _DISPATCH: dict[str, Any] = {
@@ -562,6 +746,7 @@ class StorageNode:
         MessageType.GET_WRITE_LOG.value: _handle_get_write_log,
         MessageType.GET_SNAPSHOT_STATE.value: _handle_get_snapshot_state,
         MessageType.RESET.value: _handle_reset,
+        MessageType.SHUTDOWN.value: _handle_shutdown,
     }
 
 

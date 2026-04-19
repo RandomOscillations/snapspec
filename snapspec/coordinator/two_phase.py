@@ -52,34 +52,70 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     Returns:
         SnapshotResult with success=True if consistent and committed.
     """
+    participant_node_ids = coordinator.get_snapshot_participants()
+    if len(participant_node_ids) < coordinator.minimum_snapshot_nodes():
+        return SnapshotResult(
+            success=False,
+            skipped=True,
+            participant_node_ids=participant_node_ids,
+            failure_reason="insufficient_healthy_nodes",
+        )
+
     # Phase 1: Prepare — all nodes take a snapshot, writes continue to delta
-    responses = await coordinator.send_all(_PREPARE, ts, snapshot_ts=ts)
+    responses = await coordinator.send_all(
+        _PREPARE, ts, node_ids=participant_node_ids, snapshot_ts=ts
+    )
     if not all(r is not None and r.get("type") == _READY for r in responses):
         # Some node failed to prepare — abort all
-        await coordinator.send_all(_ABORT, ts)
-        return SnapshotResult(success=False, causal_consistent=False)
+        await coordinator.send_all(_ABORT, ts, node_ids=participant_node_ids)
+        return SnapshotResult(
+            success=False,
+            causal_consistent=False,
+            participant_node_ids=participant_node_ids,
+            failure_reason="prepare_failed",
+        )
 
     # Allow delayed post-snapshot effects to land before validation.
     if coordinator.validation_grace_s > 0:
         await asyncio.sleep(coordinator.validation_grace_s)
 
     # Collect write logs + snapshot-time balances in parallel.
-    all_logs, snapshot_balances = await coordinator.collect_write_logs_and_balances_parallel(ts)
+    all_logs, snapshot_balances, responding_node_ids = (
+        await coordinator.collect_write_logs_and_balances_parallel(
+            ts, node_ids=participant_node_ids
+        )
+    )
+    if len(responding_node_ids) < coordinator.minimum_snapshot_nodes():
+        await coordinator.send_all(_ABORT, ts, node_ids=responding_node_ids)
+        return SnapshotResult(
+            success=False,
+            causal_consistent=False,
+            participant_node_ids=responding_node_ids,
+            failure_reason="insufficient_participants_after_validation",
+        )
 
     # Validate causal consistency
-    causal_result, violations = validate_causal(all_logs)
+    causal_result, violations = validate_causal(
+        all_logs, participating_node_ids=set(responding_node_ids)
+    )
     causal_ok = causal_result == ValidationResult.CONSISTENT
 
     # Phase 2: Commit or Abort
     if causal_ok:
-        await coordinator.send_all(_COMMIT, ts)
+        await coordinator.send_all(_COMMIT, ts, node_ids=responding_node_ids)
 
         # Conservation check (only meaningful on committed snapshots)
         conservation_ok: bool | None = None
         if coordinator.expected_total > 0:
+            adjusted_expected_total = coordinator.expected_total_for_participants(
+                responding_node_ids
+            )
             cons = validate_conservation(
-                snapshot_balances, all_logs,
-                coordinator.transfer_amounts, coordinator.expected_total,
+                snapshot_balances,
+                all_logs,
+                coordinator.transfer_amounts,
+                adjusted_expected_total,
+                participating_node_ids=set(responding_node_ids),
             )
             conservation_ok = cons.valid
             if not cons.valid:
@@ -97,13 +133,16 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
         recovery_balance_sum = None
         recovery_conservation = None
         if coordinator.expected_total > 0:
-            rv = await coordinator.verify_snapshot_recovery(ts)
+            rv = await coordinator.verify_snapshot_recovery(
+                ts, node_ids=responding_node_ids
+            )
             recovery_verified = rv["recovery_success"]
             recovery_balance_sum = rv["balance_sum"]
             recovery_conservation = rv.get("conservation_holds")
 
         return SnapshotResult(
             success=True,
+            participant_node_ids=responding_node_ids,
             causal_consistent=True,
             causal_violation_count=0,
             conservation_holds=conservation_ok,
@@ -112,9 +151,11 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             recovery_conservation_holds=recovery_conservation,
         )
     else:
-        await coordinator.send_all(_ABORT, ts)
+        await coordinator.send_all(_ABORT, ts, node_ids=responding_node_ids)
         return SnapshotResult(
             success=False,
+            participant_node_ids=responding_node_ids,
+            failure_reason="causal_violation",
             causal_consistent=False,
             causal_violation_count=len(violations),
         )

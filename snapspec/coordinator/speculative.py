@@ -56,6 +56,15 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     timeout = coordinator.validation_timeout_s
     delta_threshold = coordinator.delta_size_threshold_frac
     delta_blocks_at_discard: list[int] = []
+    participant_node_ids = coordinator.get_snapshot_participants()
+
+    if len(participant_node_ids) < coordinator.minimum_snapshot_nodes():
+        return SnapshotResult(
+            success=False,
+            skipped=True,
+            participant_node_ids=participant_node_ids,
+            failure_reason="insufficient_healthy_nodes",
+        )
 
     for attempt in range(max_retries + 1):
         # Fresh timestamp for retries (first attempt reuses ts)
@@ -63,11 +72,11 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
 
         # Step 1: Snap all nodes — no pause, no prepare
         responses = await coordinator.send_all(
-            _SNAP_NOW, attempt_ts, snapshot_ts=attempt_ts
+            _SNAP_NOW, attempt_ts, node_ids=participant_node_ids, snapshot_ts=attempt_ts
         )
         if not all(r is not None and r.get("type") == _SNAPPED for r in responses):
             # Snap failed on some node — abort this attempt
-            await coordinator.send_all(_ABORT, attempt_ts)
+            await coordinator.send_all(_ABORT, attempt_ts, node_ids=participant_node_ids)
             delta_blocks_at_discard.extend(_extract_delta_blocks(responses))
             if attempt < max_retries:
                 await asyncio.sleep(_BACKOFF_BASE_S * (attempt + 1))
@@ -79,31 +88,52 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
 
         # Step 2: Collect write logs + snapshot-time balances with deadline
         try:
-            all_logs, snapshot_balances = await asyncio.wait_for(
-                coordinator.collect_write_logs_and_balances_parallel(attempt_ts),
+            all_logs, snapshot_balances, responding_node_ids = await asyncio.wait_for(
+                coordinator.collect_write_logs_and_balances_parallel(
+                    attempt_ts, node_ids=participant_node_ids
+                ),
                 timeout=timeout,
             )
         except asyncio.TimeoutError:
             # Log collection too slow — abort and retry
-            abort_responses = await coordinator.send_all(_ABORT, attempt_ts)
+            abort_responses = await coordinator.send_all(
+                _ABORT, attempt_ts, node_ids=participant_node_ids
+            )
+            delta_blocks_at_discard.extend(_extract_delta_blocks(abort_responses))
+            if attempt < max_retries:
+                await asyncio.sleep(_BACKOFF_BASE_S * (attempt + 1))
+            continue
+
+        if len(responding_node_ids) < coordinator.minimum_snapshot_nodes():
+            abort_responses = await coordinator.send_all(
+                _ABORT, attempt_ts, node_ids=responding_node_ids
+            )
             delta_blocks_at_discard.extend(_extract_delta_blocks(abort_responses))
             if attempt < max_retries:
                 await asyncio.sleep(_BACKOFF_BASE_S * (attempt + 1))
             continue
 
         # Step 3: Validate causal consistency
-        result, violations = validate_causal(all_logs)
+        result, violations = validate_causal(
+            all_logs, participating_node_ids=set(responding_node_ids)
+        )
 
         if result == ValidationResult.CONSISTENT:
             # Step 4a: Commit
-            await coordinator.send_all(_COMMIT, attempt_ts)
+            await coordinator.send_all(_COMMIT, attempt_ts, node_ids=responding_node_ids)
 
             # Conservation check on committed snapshot
             conservation_ok: bool | None = None
             if coordinator.expected_total > 0:
+                adjusted_expected_total = coordinator.expected_total_for_participants(
+                    responding_node_ids
+                )
                 cons = validate_conservation(
-                    snapshot_balances, all_logs,
-                    coordinator.transfer_amounts, coordinator.expected_total,
+                    snapshot_balances,
+                    all_logs,
+                    coordinator.transfer_amounts,
+                    adjusted_expected_total,
+                    participating_node_ids=set(responding_node_ids),
                 )
                 conservation_ok = cons.valid
                 if not cons.valid:
@@ -122,7 +152,9 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             recovery_balance_sum = None
             recovery_conservation = None
             if coordinator.expected_total > 0:
-                rv = await coordinator.verify_snapshot_recovery(attempt_ts)
+                rv = await coordinator.verify_snapshot_recovery(
+                    attempt_ts, node_ids=responding_node_ids
+                )
                 recovery_verified = rv["recovery_success"]
                 recovery_balance_sum = rv["balance_sum"]
                 recovery_conservation = rv.get("conservation_holds")
@@ -130,6 +162,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             return SnapshotResult(
                 success=True,
                 retries=attempt,
+                participant_node_ids=responding_node_ids,
                 delta_blocks_at_discard=delta_blocks_at_discard,
                 causal_consistent=True,
                 causal_violation_count=0,
@@ -140,7 +173,9 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             )
 
         # Step 4b: Inconsistent — abort
-        abort_responses = await coordinator.send_all(_ABORT, attempt_ts)
+        abort_responses = await coordinator.send_all(
+            _ABORT, attempt_ts, node_ids=responding_node_ids
+        )
         attempt_deltas = _extract_delta_blocks(abort_responses)
         delta_blocks_at_discard.extend(attempt_deltas)
 
@@ -162,10 +197,14 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     return SnapshotResult(
         success=fallback_result.success,
         retries=max_retries + 1,  # indicates fallback was used
+        participant_node_ids=fallback_result.participant_node_ids,
         delta_blocks_at_discard=delta_blocks_at_discard,
         causal_consistent=fallback_result.causal_consistent,
         causal_violation_count=fallback_result.causal_violation_count,
         conservation_holds=fallback_result.conservation_holds,
+        recovery_verified=fallback_result.recovery_verified,
+        recovery_balance_sum=fallback_result.recovery_balance_sum,
+        recovery_conservation_holds=fallback_result.recovery_conservation_holds,
     )
 
 

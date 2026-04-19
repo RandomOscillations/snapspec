@@ -19,6 +19,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from snapspec.coordinator.coordinator import Coordinator
+from snapspec.logging_utils import configure_logging
 from snapspec.metrics.collector import MetricsCollector
 from snapspec.network.connection import NodeConnection
 from snapspec.network.protocol import MessageType
@@ -143,7 +144,15 @@ async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> tu
         on_snapshot_complete=metrics.on_snapshot_complete,
         total_blocks_per_node=cfg.get("total_blocks", 256),
         speculative_max_retries=int(cfg.get("speculative_max_retries", 5)),
+        operation_timeout_s=float(cfg.get("operation_timeout_s", 5.0)),
         validation_grace_s=float(cfg.get("validation_grace_s", 0.0)),
+        health_check_interval_s=float(cfg.get("health_check_interval_s", 3.0)),
+        health_check_timeout_s=float(cfg.get("health_check_timeout_s", 1.5)),
+        health_unhealthy_after_s=float(cfg.get("health_unhealthy_after_s", 10.0)),
+        status_interval_s=float(cfg.get("status_interval_s", 5.0)),
+        min_snapshot_nodes=cfg.get("min_snapshot_nodes"),
+        shutdown_timeout_s=float(cfg.get("shutdown_timeout_s", 30.0)),
+        shutdown_nodes_on_stop=bool(cfg.get("shutdown_nodes_on_stop", False)),
     )
     await coordinator.start()
 
@@ -162,6 +171,7 @@ async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> tu
 
     coordinator.expected_total = total_tokens
     coordinator.transfer_amounts = workload._transfer_amounts
+    coordinator.attach_status_sources(workload, metrics)
 
     await metrics.start_continuous_sampling(workload)
 
@@ -181,7 +191,7 @@ async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> tu
     return summary, metrics
 
 
-def print_table(results: dict):
+def build_table_lines(results: dict) -> list[str]:
     metrics_list = [
         ("causal_consistency_rate", "Causal consistency rate"),
         ("conservation_validity_rate", "Conservation validity rate"),
@@ -194,9 +204,10 @@ def print_table(results: dict):
         ("avg_throughput_writes_sec", "Avg throughput (writes/s)"),
     ]
     col_w = 26
+    lines = []
     header = f"{'Metric':<38}" + "".join(f"{s:>{col_w}}" for s in results)
-    print(header)
-    print("-" * len(header))
+    lines.append(header)
+    lines.append("-" * len(header))
     for key, label in metrics_list:
         row = f"{label:<38}"
         for strategy_name in results:
@@ -205,7 +216,25 @@ def print_table(results: dict):
                 row += f"{'N/A' if val < 0 else f'{val:.1%}':>{col_w}}"
             else:
                 row += f"{val:>{col_w}.2f}"
-        print(row)
+        lines.append(row)
+    return lines
+
+
+def print_table(results: dict):
+    for line in build_table_lines(results):
+        print(line)
+
+
+def log_final_summary(results: dict, csv_paths: list[str]):
+    logger.info("")
+    for line in build_table_lines(results):
+        logger.info(line)
+    logger.info("")
+    logger.info("CSV outputs:")
+    for path in csv_paths:
+        logger.info("  - %s", path)
+    logger.info("")
+    logger.info("=== Experiment Complete ===")
 
 
 async def main():
@@ -235,8 +264,21 @@ async def main():
         "rep": int(os.environ.get("SNAPSPEC_REP", "1")),
         "seed": int(os.environ.get("SNAPSPEC_SEED", "42")),
         "speculative_max_retries": int(os.environ.get("SNAPSPEC_SPEC_MAX_RETRIES", "5")),
+        "operation_timeout_s": float(os.environ.get("SNAPSPEC_OPERATION_TIMEOUT_S", "5.0")),
         "effect_delay_s": float(os.environ.get("SNAPSPEC_EFFECT_DELAY_MS", "0")) / 1000.0,
         "validation_grace_s": float(os.environ.get("SNAPSPEC_VALIDATION_DELAY_MS", "0")) / 1000.0,
+        "health_check_interval_s": float(os.environ.get("SNAPSPEC_HEALTH_CHECK_INTERVAL_S", "3.0")),
+        "health_check_timeout_s": float(os.environ.get("SNAPSPEC_HEALTH_CHECK_TIMEOUT_S", "1.5")),
+        "health_unhealthy_after_s": float(os.environ.get("SNAPSPEC_HEALTH_UNHEALTHY_AFTER_S", "10.0")),
+        "status_interval_s": float(os.environ.get("SNAPSPEC_STATUS_INTERVAL_S", "5.0")),
+        "min_snapshot_nodes": (
+            int(os.environ["SNAPSPEC_MIN_SNAPSHOT_NODES"])
+            if "SNAPSPEC_MIN_SNAPSHOT_NODES" in os.environ else None
+        ),
+        "shutdown_timeout_s": float(os.environ.get("SNAPSPEC_SHUTDOWN_TIMEOUT_S", "30.0")),
+        "shutdown_nodes_on_stop": (
+            os.environ.get("SNAPSPEC_SHUTDOWN_NODES_ON_STOP", "false").lower() == "true"
+        ),
     }
     output_dir = os.environ.get("SNAPSPEC_OUTPUT_DIR", "results")
 
@@ -295,12 +337,12 @@ async def main():
         print(f"  - {path}")
     print()
     print("=== Experiment Complete ===")
+    log_final_summary(results, csv_paths)
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
-    )
+    log_path = configure_logging(default_basename="coordinator")
+    if log_path:
+        logger.info("Coordinator logs are also being written to %s", log_path)
     asyncio.run(main())
 

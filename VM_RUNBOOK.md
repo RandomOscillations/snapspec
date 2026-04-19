@@ -479,6 +479,69 @@ Save these for slides / professor discussion:
 - challenge list above
 - exact branch and commit used during the run
 
+## 15A. Latest Result Notes
+
+These are the most important findings from the latest corrected runs and should
+be kept for the final presentation/write-up.
+
+### Latest baseline result
+
+Files:
+
+- `results/vm_c3_row_pause_and_snap_baseline_rep1.csv`
+- `results/vm_c4_row_two_phase_baseline_rep1.csv`
+- `results/vm_c5_row_speculative_baseline_rep1.csv`
+
+Summary:
+
+- All three baseline runs are now correct again under light load.
+- `pause_and_snap`: 100% commit, 100% causal, 100% conservation, about 142.75 writes/s
+- `two_phase`: 100% commit, 100% causal, 100% conservation, about 146.06 writes/s
+- `speculative`: 100% commit, 100% causal, 100% conservation, about 139.31 writes/s
+
+Interpretation:
+
+- Under light baseline load, all three protocols are correct.
+- `two_phase` is currently the fastest baseline configuration among the three ROW runs.
+
+### Latest stressed debug result
+
+Files:
+
+- `results/debug_conservation_row_two_phase_0.20_rep1.csv`
+- `results/debug_conservation_row_speculative_0.20_rep1.csv`
+
+Settings used:
+
+- dependency ratio = `0.20`
+- snapshot interval = `1s`
+- write rate = `350`
+- effect delay = `25ms`
+- validation delay = `50ms`
+
+Summary:
+
+- Conservation is now fixed on committed snapshots in this stressed case.
+- `two_phase`:
+  - snapshot commit rate about 11.8%
+  - causal consistency rate about 11.8%
+  - conservation validity rate 100% on committed snapshots
+  - throughput about 113.25 writes/s
+- `speculative`:
+  - snapshot commit rate about 75.0%
+  - causal consistency rate about 75.0%
+  - conservation validity rate 100% on committed snapshots
+  - avg retry rate about 3.5
+  - throughput about 100.8 writes/s
+
+Interpretation:
+
+- The validation-delay mitigation worked for conservation.
+- The remaining behavior under stress is now a real protocol tradeoff, not just a broken accounting path.
+- `speculative` now clearly shows retry behavior and commits many more snapshots than `two_phase` in this stressed case.
+- `two_phase` still has slightly better write throughput in this same stressed case.
+- The next high-value step is to rerun full Exp 3 with the validation delay enabled and re-evaluate the crossover story.
+
 ## 16. Docker Container Path
 
 You can also run the same distributed setup in Docker containers instead of VMs.
@@ -580,3 +643,41 @@ Frequency sweep:
 - `snapspec/coordinator/speculative.py`
 - `snapspec/node/server.py`
 - `snapspec/validation/conservation.py`
+
+## 18. Real Data SQL Path
+
+The branch now also carries an in-progress MySQL-backed path for running the
+same coordination logic over real SQL state.
+
+Important files:
+
+- `snapspec/mysql/blockstore.py`
+- `snapspec/mysql/node.py`
+- `demo_remote/run_remote_node.py`
+- `docker/docker-compose.mysql.yml`
+- `experiments/run_experiment.py`
+- `experiments/configs/mysql_pause_and_snap.yaml`
+- `experiments/configs/mysql_two_phase.yaml`
+- `experiments/configs/mysql_speculative.yaml`
+- `experiments/verify_mysql.py`
+
+Quick smoke test flow:
+
+```bash
+cd docker
+docker compose -f docker-compose.mysql.yml up -d mysql0 mysql1 mysql2
+docker compose -f docker-compose.mysql.yml up -d node0 node1 node2
+docker compose -f docker-compose.mysql.yml run --rm coordinator
+```
+
+Config-driven MySQL experiment flow:
+
+```bash
+python experiments/run_experiment.py --config experiments/configs/mysql_speculative.yaml --rep 1 --output results
+```
+
+MySQL verification helper:
+
+```bash
+python experiments/verify_mysql.py --host 127.0.0.1 --port 3306 --user root --password snapspec --database snapspec_node_0
+```

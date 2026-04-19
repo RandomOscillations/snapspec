@@ -23,15 +23,21 @@ def block_store():
     return bs
 
 
-async def _start_node(block_store, node_id=0) -> StorageNode:
+async def _start_node(
+    block_store,
+    node_id=0,
+    port=0,
+    archive_dir="/tmp/snapspec_test_archives",
+    initial_balance=1000,
+) -> StorageNode:
     """Start a node on a random port and return it."""
     node = StorageNode(
         node_id=node_id,
         host="127.0.0.1",
-        port=0,  # OS-assigned
+        port=port,
         block_store=block_store,
-        archive_dir="/tmp/snapspec_test_archives",
-        initial_balance=1000,
+        archive_dir=archive_dir,
+        initial_balance=initial_balance,
     )
     await node.start()
     return node
@@ -356,6 +362,42 @@ class TestBalanceUpdate:
             await conn.close()
         finally:
             await node.stop()
+
+    @pytest.mark.asyncio
+    async def test_balance_persists_across_restart(self, tmp_path):
+        archive_dir = str(tmp_path / "archives")
+
+        first_store = MockBlockStore(block_size=64, total_blocks=128)
+        node = await _start_node(
+            first_store,
+            archive_dir=archive_dir,
+            initial_balance=1000,
+        )
+        restart_port = node.actual_port
+        try:
+            conn = await _connect(node)
+            data_b64 = base64.b64encode(b"\x01" * 64).decode("ascii")
+            await conn.send_and_receive(
+                MessageType.WRITE, 1,
+                block_id=0, data=data_b64, role="CAUSE",
+                balance_delta=-125,
+            )
+            assert node._balance == 875
+            await conn.close()
+        finally:
+            await node.stop()
+
+        restarted_store = MockBlockStore(block_size=64, total_blocks=128)
+        restarted = await _start_node(
+            restarted_store,
+            port=restart_port,
+            archive_dir=archive_dir,
+            initial_balance=1000,
+        )
+        try:
+            assert restarted._balance == 875
+        finally:
+            await restarted.stop()
 
 
 class TestMultipleConnections:
