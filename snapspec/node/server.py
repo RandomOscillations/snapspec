@@ -372,9 +372,14 @@ class StorageNode:
 
                 try:
                     await handler(self, msg, writer)
+                except (ConnectionResetError, BrokenPipeError):
+                    raise  # propagate to outer handler which logs at DEBUG
                 except Exception as e:
                     logger.exception("Node %d: handler error for %s", self.node_id, msg_type)
-                    await self._send_error(writer, msg, str(e))
+                    try:
+                        await self._send_error(writer, msg, str(e))
+                    except (ConnectionResetError, BrokenPipeError):
+                        pass  # client already gone during teardown
         except (ConnectionResetError, BrokenPipeError):
             log_event(
                 logger,

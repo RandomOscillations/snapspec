@@ -1,0 +1,5 @@
+aiomysql>=0.2.0
+pyyaml>=6.0
+matplotlib>=3.7
+pytest>=7.0
+pytest-asyncio>=0.23
