@@ -169,6 +169,7 @@ async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> tu
     )
     await workload.start()
 
+    coordinator.set_workload(workload)
     coordinator.expected_total = total_tokens
     coordinator.transfer_amounts = workload._transfer_amounts
     coordinator.attach_status_sources(workload, metrics)
