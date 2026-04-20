@@ -446,7 +446,6 @@ class StorageNode:
             # Update token balance
             if "balance_delta" in msg:
                 self._balance += msg["balance_delta"]
-                self._persist_runtime_state()
 
         await self._send(writer, MessageType.WRITE_ACK, ts, block_id=block_id)
         if dep_tag > 0 or self.total_writes <= 3 or self.total_writes % 250 == 0:
