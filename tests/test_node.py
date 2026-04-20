@@ -11,25 +11,29 @@ from __future__ import annotations
 import asyncio
 import base64
 import pytest
+import pytest_asyncio
 
 from snapspec.network.connection import NodeConnection
 from snapspec.network.protocol import MessageType
 from snapspec.node.server import StorageNode, NodeState, MockBlockStore
 
 
-@pytest.fixture
-def block_store():
+@pytest_asyncio.fixture
+async def block_store(tmp_path):
     bs = MockBlockStore(block_size=64, total_blocks=128)
-    return bs
+    bs._tmp_path = tmp_path  # pass through for archive_dir isolation
+    yield bs
 
 
 async def _start_node(
     block_store,
     node_id=0,
     port=0,
-    archive_dir="/tmp/snapspec_test_archives",
+    archive_dir=None,
     initial_balance=1000,
 ) -> StorageNode:
+    if archive_dir is None:
+        archive_dir = str(getattr(block_store, '_tmp_path', '/tmp/snapspec_test_archives'))
     """Start a node on a random port and return it."""
     node = StorageNode(
         node_id=node_id,

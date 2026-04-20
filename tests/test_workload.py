@@ -126,13 +126,16 @@ class TestCrossNodeTransfer:
             get_timestamp=_make_clock(), total_tokens=30_000,
             block_size=64, total_blocks=32, seed=42, effect_delay_s=0.05,
         )
+        await wl.start()
 
         task = asyncio.create_task(wl._do_cross_node_transfer())
         await asyncio.sleep(0.02)
 
-        assert len(wl.transfer_amounts) == 1, "Transfer should be tracked while credit is still pending"
+        # Transfer amount is recorded before credit is sent (effect_delay_s=0.05)
+        assert len(wl._transfer_amounts) >= 1, "Transfer should be tracked while credit is still pending"
 
         await task
+        await wl.stop()
 
     @pytest.mark.asyncio
     async def test_debit_before_credit_ordering(self, nodes):

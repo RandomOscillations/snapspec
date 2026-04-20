@@ -27,7 +27,7 @@ TOTAL_TOKENS = 30_000
 
 
 @pytest_asyncio.fixture
-async def cluster():
+async def cluster(tmp_path):
     """Start nodes, yield (nodes, node_configs), then stop."""
     stores = [MockBlockStore(block_size=BLOCK_SIZE, total_blocks=TOTAL_BLOCKS) for _ in range(NUM_NODES)]
     nodes = [
@@ -35,6 +35,7 @@ async def cluster():
             node_id=i, host="127.0.0.1", port=0,
             block_store=stores[i],
             initial_balance=TOTAL_TOKENS // NUM_NODES,
+            archive_dir=str(tmp_path / f"archives_{i}"),
         )
         for i in range(NUM_NODES)
     ]
