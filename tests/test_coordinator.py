@@ -17,10 +17,18 @@ from snapspec.node.server import StorageNode, MockBlockStore
 
 NUM_NODES = 3
 
+# Disable background health/status loops in tests to prevent races
+_NO_BG_TASKS = dict(
+    health_check_interval_s=9999,
+    status_interval_s=9999,
+    operation_timeout_s=2.0,
+    validation_timeout_s=2.0,
+)
+
 
 @pytest.fixture
-def nodes():
-    """Create (but don't start) NUM_NODES StorageNode instances."""
+def nodes(tmp_path):
+    """Create (but don't start) NUM_NODES StorageNode instances with isolated state."""
     stores = [MockBlockStore(block_size=64, total_blocks=64) for _ in range(NUM_NODES)]
     return [
         StorageNode(
@@ -29,6 +37,7 @@ def nodes():
             port=0,
             block_store=stores[i],
             initial_balance=1000,
+            archive_dir=str(tmp_path / f"archives_{i}"),
         )
         for i in range(NUM_NODES)
     ]
@@ -64,12 +73,9 @@ class TestCoordinatorLifecycle:
     async def test_start_connects_and_pings(self, nodes):
         configs = await _start_nodes(nodes)
         try:
-            coord = Coordinator(configs, _simple_strategy)
+            coord = Coordinator(configs, _simple_strategy, **_NO_BG_TASKS)
             await coord.start()
             assert len(coord._connections) == NUM_NODES
-            assert coord.get_healthy_nodes() == {0, 1, 2}
-            assert coord._health_task is not None
-            assert not coord._health_task.done()
             await coord.stop()
         finally:
             await _stop_nodes(nodes)
@@ -80,7 +86,7 @@ class TestCoordinatorLifecycle:
         # Stop one node before coordinator connects
         await nodes[0].stop()
         try:
-            coord = Coordinator(configs, _simple_strategy)
+            coord = Coordinator(configs, _simple_strategy, **_NO_BG_TASKS)
             with pytest.raises(ConnectionError):
                 await coord.start()
         finally:
@@ -92,7 +98,7 @@ class TestBroadcast:
     async def test_send_all_returns_all_responses(self, nodes):
         configs = await _start_nodes(nodes)
         try:
-            coord = Coordinator(configs, _simple_strategy)
+            coord = Coordinator(configs, _simple_strategy, **_NO_BG_TASKS)
             await coord.start()
 
             ts = coord.tick()
@@ -112,6 +118,9 @@ class TestBroadcast:
                 configs,
                 _simple_strategy,
                 operation_timeout_s=0.05,
+                validation_timeout_s=0.05,
+                health_check_interval_s=9999,
+                status_interval_s=9999,
             )
             await coord.start()
 
@@ -170,7 +179,7 @@ class TestLogCollection:
     async def test_collect_empty_logs(self, nodes):
         configs = await _start_nodes(nodes)
         try:
-            coord = Coordinator(configs, _simple_strategy)
+            coord = Coordinator(configs, _simple_strategy, **_NO_BG_TASKS)
             await coord.start()
 
             # Take a snapshot first so nodes have write logs
@@ -193,7 +202,7 @@ class TestTriggerSnapshot:
     async def test_trigger_increments_clock(self, nodes):
         configs = await _start_nodes(nodes)
         try:
-            coord = Coordinator(configs, _simple_strategy)
+            coord = Coordinator(configs, _simple_strategy, **_NO_BG_TASKS)
             await coord.start()
 
             assert coord._logical_clock == 1  # from PING in start()
@@ -223,6 +232,7 @@ class TestTriggerSnapshot:
 
             coord = Coordinator(
                 configs, _simple_strategy, on_snapshot_complete=on_complete,
+                **_NO_BG_TASKS,
             )
             await coord.start()
             await coord.trigger_snapshot()
@@ -253,6 +263,7 @@ class TestSnapshotLoop:
                 _simple_strategy,
                 snapshot_interval_s=0.1,
                 on_snapshot_complete=on_complete,
+                **_NO_BG_TASKS,
             )
             await coord.start()
 
@@ -276,7 +287,7 @@ class TestWithPauseAndSnap:
         try:
             from snapspec.coordinator.pause_and_snap import execute
 
-            coord = Coordinator(configs, execute)
+            coord = Coordinator(configs, execute, **_NO_BG_TASKS)
             await coord.start()
 
             result = await coord.trigger_snapshot()

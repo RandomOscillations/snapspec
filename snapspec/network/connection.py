@@ -31,11 +31,14 @@ class NodeConnection:
     state: str = field(default="disconnected", init=False)
     _io_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
-    async def connect(self):
+    async def connect(self, timeout_s: float = 5.0):
         """Establish connection with TCP_NODELAY."""
         await self._cleanup_closed_connection()
         self.state = "reconnecting"
-        self.reader, self.writer = await asyncio.open_connection(self.host, self.port)
+        self.reader, self.writer = await asyncio.wait_for(
+            asyncio.open_connection(self.host, self.port),
+            timeout=timeout_s,
+        )
         # Disable Nagle's algorithm
         sock = self.writer.get_extra_info("socket")
         if sock:
@@ -121,7 +124,7 @@ class NodeConnection:
                     attempt=attempt + 1,
                 )
                 return True
-            except (ConnectionRefusedError, ConnectionResetError, ConnectionAbortedError, OSError) as exc:
+            except (ConnectionRefusedError, ConnectionResetError, ConnectionAbortedError, OSError, asyncio.TimeoutError) as exc:
                 delay = min(
                     self.reconnect_backoff_base_s * (2 ** attempt),
                     self.reconnect_backoff_max_s,
@@ -157,6 +160,6 @@ class NodeConnection:
             except Exception:
                 return
             try:
-                await writer.wait_closed()
-            except Exception:
+                await asyncio.wait_for(writer.wait_closed(), timeout=0.5)
+            except (Exception, asyncio.TimeoutError):
                 pass

@@ -67,6 +67,8 @@ class TestFullRunPauseAndSnap:
             snapshot_interval_s=0.3,
             on_snapshot_complete=metrics.on_snapshot_complete,
             total_blocks_per_node=TOTAL_BLOCKS,
+            health_check_interval_s=9999,
+            status_interval_s=9999,
         )
         await coordinator.start()
 
@@ -124,6 +126,8 @@ class TestFullRunSpeculative:
             snapshot_interval_s=0.5,
             on_snapshot_complete=metrics.on_snapshot_complete,
             total_blocks_per_node=TOTAL_BLOCKS,
+            health_check_interval_s=9999,
+            status_interval_s=9999,
         )
         await coordinator.start()
 
