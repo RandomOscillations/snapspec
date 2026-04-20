@@ -103,6 +103,9 @@ void FullCopyBlockStore::commit_snapshot(const std::string& archive_path) {
     std::lock_guard<std::mutex> lock(mu_);
     assert(snapshot_active_ && "Cannot commit: no active snapshot");
 
+    std::filesystem::create_directories(
+        std::filesystem::path(archive_path).parent_path());
+
     // Snapshot file is already a complete copy — just move it to archive
     std::filesystem::rename(snapshot_path_, archive_path);
 

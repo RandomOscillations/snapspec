@@ -589,7 +589,26 @@ class StorageNode:
             # Save snapshot-time balance before clearing
             if self._snapshot_balance is not None:
                 self._archive_balances[archive_path] = self._snapshot_balance
-            self.block_store.commit_snapshot(archive_path)
+
+            try:
+                self.block_store.commit_snapshot(archive_path)
+            except Exception as e:
+                # Commit failed — recover so node doesn't get stuck
+                logger.error(
+                    "Node %d: commit_snapshot failed: %s — discarding to recover",
+                    self.node_id, e,
+                )
+                try:
+                    self.block_store.discard_snapshot()
+                except Exception:
+                    pass
+                self._archive_balances.pop(archive_path, None)
+                self._writes_paused = False
+                self.state = NodeState.IDLE
+                self._snapshot_balance = None
+                await self._send_error(writer, msg, f"COMMIT failed: {e}")
+                return
+
             self._writes_paused = False
             self.state = NodeState.IDLE
             self._snapshot_balance = None

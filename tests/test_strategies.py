@@ -51,13 +51,14 @@ class MockCoordinator:
         return self._write_logs
 
     async def collect_write_logs_and_balances_parallel(
-        self, ts: int
-    ) -> tuple[list[list[dict]], list[int]]:
+        self, ts: int, **kwargs
+    ) -> tuple[list[list[dict]], list[int], list[int]]:
         self._call_log.append(("GET_WRITE_LOG", ts))
         balances = self._snapshot_balances or [0] * len(self._write_logs)
-        return self._write_logs, balances
+        node_ids = kwargs.get("node_ids", list(range(len(balances))))
+        return self._write_logs, balances, node_ids
 
-    async def verify_snapshot_recovery(self, snapshot_ts: int) -> dict:
+    async def verify_snapshot_recovery(self, snapshot_ts: int, **kwargs) -> dict:
         self._call_log.append(("VERIFY_RECOVERY", snapshot_ts))
         return {
             "recovery_success": True,
@@ -67,6 +68,21 @@ class MockCoordinator:
             "conservation_holds": True if self.expected_total > 0 else None,
         }
 
+    def get_snapshot_participants(self) -> list[int]:
+        return [0, 1]
+
+    def minimum_snapshot_nodes(self) -> int:
+        return 1
+
+    def expected_total_for_participants(self, node_ids: list[int]) -> int:
+        return self.expected_total
+
+    async def drain_workload(self) -> None:
+        pass
+
+    def resume_workload(self) -> None:
+        pass
+
     def was_called(self, msg_type: str) -> bool:
         return any(t == msg_type for t, _ in self._call_log)
 
@@ -74,9 +90,9 @@ class MockCoordinator:
         return sum(1 for t, _ in self._call_log if t == msg_type)
 
 
-def _entry(tag: int, role: str):
+def _entry(tag: int, role: str, node_id: int = 0, partner_node_id: int = 1):
     return {"dependency_tag": tag, "role": role, "block_id": 0,
-            "timestamp": 1, "partner_node_id": 0}
+            "timestamp": 1, "node_id": node_id, "partner_node_id": partner_node_id}
 
 
 # ---- Pause-and-Snap Tests ----
@@ -193,11 +209,12 @@ class TestSpeculative:
         call_count = [0]
 
         # First 2 attempts return inconsistent logs, 3rd returns consistent
-        async def mock_collect(ts):
+        async def mock_collect(ts, **kwargs):
             call_count[0] += 1
+            nids = kwargs.get("node_ids", [0, 1])
             if call_count[0] <= 2:
-                return [[_entry(tag=1, role="CAUSE")], []], [0, 0]  # inconsistent
-            return [[], []], [0, 0]  # consistent
+                return [[_entry(tag=1, role="CAUSE")], []], [0, 0], nids
+            return [[], []], [0, 0], nids
 
         coord.collect_write_logs_and_balances_parallel = mock_collect
         result = await execute(coord, ts=1)
@@ -211,11 +228,12 @@ class TestSpeculative:
 
         call_count = [0]
 
-        async def mock_collect(ts):
+        async def mock_collect(ts, **kwargs):
             call_count[0] += 1
+            nids = kwargs.get("node_ids", [0, 1])
             if call_count[0] <= 3:  # speculative attempts (0,1,2)
-                return [[_entry(tag=1, role="CAUSE")], []], [0, 0]
-            return [[], []], [0, 0]  # two-phase fallback
+                return [[_entry(tag=1, role="CAUSE")], []], [0, 0], nids
+            return [[], []], [0, 0], nids  # two-phase fallback
 
         coord.collect_write_logs_and_balances_parallel = mock_collect
         result = await execute(coord, ts=1)
@@ -228,11 +246,12 @@ class TestSpeculative:
 
         call_count = [0]
 
-        async def inconsistent_then_consistent(ts):
+        async def inconsistent_then_consistent(ts, **kwargs):
             call_count[0] += 1
+            nids = kwargs.get("node_ids", [0, 1])
             if call_count[0] == 1:
-                return [[_entry(tag=1, role="CAUSE")], []], [0, 0]
-            return [[], []], [0, 0]
+                return [[_entry(tag=1, role="CAUSE")], []], [0, 0], nids
+            return [[], []], [0, 0], nids
 
         coord.collect_write_logs_and_balances_parallel = inconsistent_then_consistent
         result = await execute(coord, ts=1)

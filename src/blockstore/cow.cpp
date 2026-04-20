@@ -154,6 +154,9 @@ void COWBlockStore::commit_snapshot(const std::string& archive_path) {
     snapshot_file_.flush();
     snapshot_file_.close();
 
+    std::filesystem::create_directories(
+        std::filesystem::path(archive_path).parent_path());
+
     // Move completed snapshot to archive location
     std::filesystem::rename(snapshot_path_, archive_path);
 

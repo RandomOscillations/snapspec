@@ -87,6 +87,9 @@ class Coordinator:
         self.expected_total: int = 0           # 0 disables conservation check
         self.transfer_amounts: dict = {}       # live reference to workload's transfer dict
 
+        # Workload reference — set via set_workload() for drain coordination
+        self._workload = None
+
         # Connections: ordered list matching node_configs order
         self._connections: list[NodeConnection] = []
         # Also expose as a dict for convenience
@@ -395,6 +398,24 @@ class Coordinator:
         self._status_workload = workload
         self._status_metrics = metrics
         self._capture_workload_balance_estimates()
+
+    def set_workload(self, workload) -> None:
+        """Register the workload generator for drain coordination."""
+        self._workload = workload
+
+    async def drain_workload(self) -> None:
+        """Drain in-flight transfers in the workload generator.
+
+        Blocks until any half-completed cross-node transfer finishes.
+        No-op if no workload is registered.
+        """
+        if self._workload is not None:
+            await self._workload.drain()
+
+    def resume_workload(self) -> None:
+        """Re-enable cross-node transfers after drain. No-op if no workload."""
+        if self._workload is not None:
+            self._workload.resume_transfers()
 
     async def run(self, duration_s: float):
         """Convenience: start, run snapshot loop for duration, then stop."""

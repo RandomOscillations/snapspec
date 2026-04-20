@@ -115,3 +115,11 @@ class CoordinatorProtocol(Protocol):
     def expected_total_for_participants(self, node_ids: list[int]) -> int:
         """Return adjusted conservation total for a partial snapshot."""
         ...
+
+    async def drain_workload(self) -> None:
+        """Drain in-flight workload transfers before pausing."""
+        ...
+
+    def resume_workload(self) -> None:
+        """Re-enable cross-node transfers after drain."""
+        ...

@@ -109,6 +109,7 @@ async def _spawn_node(
     balance = str(total_tokens // num_nodes)
     data_dir = config.get("data_dir", "/tmp/snapspec_data")
     archive_dir = config.get("archive_dir", "/tmp/snapspec_archives")
+    os.makedirs(archive_dir, exist_ok=True)
 
     proc = await asyncio.create_subprocess_exec(
         sys.executable, "-m", "snapspec.node",
@@ -262,6 +263,7 @@ async def run_single(config: dict, rep: int, output_dir: str) -> str:
             effect_delay_s=config.get("effect_delay_s", 0.0),
         )
         await workload.start()
+        coordinator.set_workload(workload)
         coordinator.transfer_amounts = workload._transfer_amounts
         coordinator.attach_status_sources(workload, metrics)
 

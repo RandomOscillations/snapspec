@@ -160,13 +160,27 @@ class WorkloadGenerator:
             transfers_tracked=len(self._transfer_amounts),
         )
 
+    async def drain(self):
+        """Stop starting new cross-node transfers and wait for any in-flight transfer to complete.
+
+        Called by the coordinator before PAUSE to ensure no half-completed
+        transfers exist when the snapshot is taken.
+        """
+        self._draining = True
+        await self._transfer_idle.wait()
+
+    def resume_transfers(self):
+        """Re-enable cross-node transfers after drain. Called after RESUME."""
+        self._draining = False
+
     async def _run_loop(self):
         """Rate-limited write loop."""
         while self._running:
             start = time.monotonic()
 
             try:
-                if self._rng.random() < self._cross_node_ratio:
+                if (not self._draining
+                        and self._rng.random() < self._cross_node_ratio):
                     await self._do_cross_node_transfer()
                     writes_this_iter = 2
                 else:

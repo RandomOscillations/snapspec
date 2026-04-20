@@ -152,6 +152,9 @@ void ROWBlockStore::commit_snapshot(const std::string& archive_path) {
     std::lock_guard<std::mutex> lock(mu_);
     assert(snapshot_active_ && "Cannot commit: no active snapshot");
 
+    std::filesystem::create_directories(
+        std::filesystem::path(archive_path).parent_path());
+
     // Strategy C (In-place commit):
     // 1. Copy base to archive — the base IS the snapshot, so this archives it
     std::filesystem::copy_file(base_path_, archive_path,

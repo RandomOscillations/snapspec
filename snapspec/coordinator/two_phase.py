@@ -102,7 +102,17 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
 
     # Phase 2: Commit or Abort
     if causal_ok:
-        await coordinator.send_all(_COMMIT, ts, node_ids=responding_node_ids)
+        commit_responses = await coordinator.send_all(
+            _COMMIT, ts, node_ids=responding_node_ids
+        )
+        if not all(r is not None and r.get("type") == "ACK" for r in commit_responses):
+            logger.warning("Two-phase: some nodes failed COMMIT at ts=%d", ts)
+            return SnapshotResult(
+                success=False, causal_consistent=True,
+                conservation_holds=False,
+                participant_node_ids=responding_node_ids,
+                failure_reason="commit_failed",
+            )
 
         # Conservation check (only meaningful on committed snapshots)
         conservation_ok: bool | None = None

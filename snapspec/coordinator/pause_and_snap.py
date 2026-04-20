@@ -55,10 +55,16 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             failure_reason="insufficient_healthy_nodes",
         )
 
+    # Phase 0: Drain in-flight transfers in the workload generator.
+    # Without this, a cross-node transfer can be split by PAUSE: the debit
+    # is ACK'd but the credit is blocked by PAUSED_ERR — conservation violation.
+    await coordinator.drain_workload()
+
     # Phase 1: Pause all writes on all nodes
     responses = await coordinator.send_all(_PAUSE, ts, node_ids=participant_node_ids)
     if not _all_responded_with(responses, _PAUSED):
         # Some node failed to pause — resume everyone and abort
+        coordinator.resume_workload()
         await coordinator.send_all(_RESUME, ts, node_ids=participant_node_ids)
         return SnapshotResult(
             success=False,
@@ -72,6 +78,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     )
     if not _all_responded_with(responses, _SNAPPED):
         # Snapshot failed on some node — resume and abort
+        coordinator.resume_workload()
         await coordinator.send_all(_RESUME, ts, node_ids=participant_node_ids)
         return SnapshotResult(
             success=False,
@@ -82,7 +89,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     # Phase 3: Collect logs + balances while writes are still paused.
     # Causal consistency is trivially guaranteed (no concurrent writes during snapshot).
     # We run conservation as an empirical baseline check.
-    _, snapshot_balances, responding_node_ids = (
+    all_logs, snapshot_balances, responding_node_ids = (
         await coordinator.collect_write_logs_and_balances_parallel(
             ts, node_ids=participant_node_ids
         )
@@ -97,13 +104,14 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
 
     conservation_ok: bool | None = None
     if coordinator.expected_total > 0:
-        # Write log is empty (writes were paused), so no in-transit tokens.
         adjusted_expected_total = coordinator.expected_total_for_participants(
             responding_node_ids
         )
+        # Logs should be empty (writes paused after drain), but pass them
+        # for defense-in-depth: in-transit detection can still catch edge cases.
         cons = validate_conservation(
             snapshot_balances,
-            [],
+            all_logs,
             coordinator.transfer_amounts,
             adjusted_expected_total,
             participating_node_ids=set(responding_node_ids),
@@ -119,11 +127,19 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                 cons.post_role_samples,
             )
 
-    # Phase 4: Commit — snapshot is consistent by construction
-    await coordinator.send_all(_COMMIT, ts, node_ids=responding_node_ids)
+    # Phase 4: Commit
+    commit_responses = await coordinator.send_all(_COMMIT, ts, node_ids=responding_node_ids)
+    if not _all_responded_with(commit_responses, "ACK"):
+        logger.warning("Pause-and-snap: some nodes failed COMMIT at ts=%d", ts)
+        coordinator.resume_workload()
+        await coordinator.send_all(_RESUME, ts, node_ids=responding_node_ids)
+        return SnapshotResult(success=False, conservation_holds=False,
+                              participant_node_ids=responding_node_ids,
+                              failure_reason="commit_failed")
 
     # Phase 5: Resume writes
     await coordinator.send_all(_RESUME, ts, node_ids=responding_node_ids)
+    coordinator.resume_workload()
 
     # Phase 6: Verify recovery if enabled
     recovery_verified = None

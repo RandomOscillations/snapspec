@@ -120,7 +120,19 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
 
         if result == ValidationResult.CONSISTENT:
             # Step 4a: Commit
-            await coordinator.send_all(_COMMIT, attempt_ts, node_ids=responding_node_ids)
+            commit_responses = await coordinator.send_all(
+                _COMMIT, attempt_ts, node_ids=responding_node_ids
+            )
+            if not all(r is not None and r.get("type") == "ACK"
+                       for r in commit_responses):
+                logger.warning(
+                    "Speculative: some nodes failed COMMIT at ts=%d", attempt_ts
+                )
+                delta_blocks_at_discard.extend(
+                    _extract_delta_blocks(commit_responses))
+                if attempt < max_retries:
+                    await asyncio.sleep(_BACKOFF_BASE_S * (attempt + 1))
+                continue
 
             # Conservation check on committed snapshot
             conservation_ok: bool | None = None
