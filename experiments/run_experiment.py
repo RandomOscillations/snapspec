@@ -197,11 +197,6 @@ async def run_single(config: dict, rep: int, output_dir: str) -> str:
         )
         await workload.start()
 
-        # 4b. Wire coordinator ↔ workload for drain coordination + conservation
-        coordinator.set_workload(workload)
-        coordinator.expected_total = total_tokens
-        coordinator.transfer_amounts = workload._transfer_amounts
-
         # 5. Start continuous sampling
         await metrics.start_continuous_sampling(workload)
 

@@ -66,14 +66,6 @@ class MockCoordinator:
             "conservation_holds": True if self.expected_total > 0 else None,
         }
 
-    async def drain_workload(self) -> None:
-        """No-op for tests — no real workload to drain."""
-        pass
-
-    def resume_workload(self) -> None:
-        """No-op for tests — no real workload to resume."""
-        pass
-
     def was_called(self, msg_type: str) -> bool:
         return any(t == msg_type for t, _ in self._call_log)
 
