@@ -42,10 +42,18 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     Returns:
         SnapshotResult with success=True if snapshot committed, False if aborted.
     """
+    # Phase 0: Drain in-flight transfers in the workload generator.
+    # Without this, a cross-node transfer can be split by PAUSE: the debit
+    # is ACK'd (balance decremented on source) but the credit is blocked by
+    # PAUSED_ERR (balance never incremented on dest). The snapshot then
+    # captures a state where tokens have vanished — conservation violation.
+    await coordinator.drain_workload()
+
     # Phase 1: Pause all writes on all nodes
     responses = await coordinator.send_all(_PAUSE, ts)
     if not _all_responded_with(responses, _PAUSED):
         # Some node failed to pause — resume everyone and abort
+        coordinator.resume_workload()
         await coordinator.send_all(_RESUME, ts)
         return SnapshotResult(success=False)
 
@@ -53,27 +61,31 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     responses = await coordinator.send_all(_SNAP_NOW, ts, snapshot_ts=ts)
     if not _all_responded_with(responses, _SNAPPED):
         # Snapshot failed on some node — resume and abort
+        coordinator.resume_workload()
         await coordinator.send_all(_RESUME, ts)
         return SnapshotResult(success=False)
 
     # Phase 3: Collect logs + balances while writes are still paused.
     # Causal consistency is trivially guaranteed (no concurrent writes during snapshot).
     # We run conservation as an empirical baseline check.
-    _, snapshot_balances = await coordinator.collect_write_logs_and_balances_parallel(ts)
+    all_logs, snapshot_balances = await coordinator.collect_write_logs_and_balances_parallel(ts)
 
     conservation_ok: bool | None = None
     if coordinator.expected_total > 0:
-        # Write log is empty (writes were paused), so no in-transit tokens.
+        # Logs should be empty (writes were paused after drain), but pass them
+        # for defense-in-depth: if a transfer somehow slips through, the
+        # in-transit detection in validate_conservation can still catch it.
         cons = validate_conservation(
-            snapshot_balances, [], coordinator.transfer_amounts, coordinator.expected_total,
+            snapshot_balances, all_logs, coordinator.transfer_amounts, coordinator.expected_total,
         )
         conservation_ok = cons.valid
 
     # Phase 4: Commit — snapshot is consistent by construction
     await coordinator.send_all(_COMMIT, ts)
 
-    # Phase 5: Resume writes
+    # Phase 5: Resume writes and re-enable cross-node transfers
     await coordinator.send_all(_RESUME, ts)
+    coordinator.resume_workload()
 
     # Phase 6: Verify recovery if enabled
     recovery_verified = None

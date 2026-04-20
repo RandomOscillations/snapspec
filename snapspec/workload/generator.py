@@ -92,6 +92,12 @@ class WorkloadGenerator:
         self._running = False
         self._task: asyncio.Task | None = None
 
+        # Drain support: allows coordinator to wait for in-flight transfers
+        self._draining = False
+        self._transfer_in_flight = False
+        self._transfer_idle = asyncio.Event()
+        self._transfer_idle.set()  # starts idle (no transfer in progress)
+
     # ── Properties ──────────────────────────────────────────────────────
 
     @property
@@ -153,6 +159,21 @@ class WorkloadGenerator:
             self._writes_completed, len(self._transfer_amounts),
         )
 
+    async def drain(self):
+        """Stop starting new cross-node transfers and wait for any in-flight transfer to complete.
+
+        Called by the coordinator before PAUSE to ensure no half-completed
+        transfers exist when the snapshot is taken. Without this, a debit can
+        apply before PAUSE while the credit is blocked by PAUSED_ERR, causing
+        a conservation violation in the snapshot.
+        """
+        self._draining = True
+        await self._transfer_idle.wait()
+
+    def resume_transfers(self):
+        """Re-enable cross-node transfers after drain. Called after RESUME."""
+        self._draining = False
+
     # ── Main loop ───────────────────────────────────────────────────────
 
     async def _run_loop(self):
@@ -161,7 +182,8 @@ class WorkloadGenerator:
             start = time.monotonic()
 
             try:
-                if self._rng.random() < self._cross_node_ratio:
+                if (not self._draining
+                        and self._rng.random() < self._cross_node_ratio):
                     await self._do_cross_node_transfer()
                     writes_this_iter = 2
                 else:
@@ -185,41 +207,50 @@ class WorkloadGenerator:
 
         CRITICAL: Debit must be ACK'd before credit is sent.
         """
-        # Pick source and destination (must differ)
-        source = self._rng.choice(self._node_ids)
-        dest = self._rng.choice([n for n in self._node_ids if n != source])
+        self._transfer_idle.clear()
+        self._transfer_in_flight = True
 
-        # Random amount, capped to avoid overdraft
-        max_amount = max(1, self._balances[source] // 10)
-        amount = self._rng.randint(1, max_amount)
+        try:
+            # Pick source and destination (must differ)
+            source = self._rng.choice(self._node_ids)
+            dest = self._rng.choice([n for n in self._node_ids if n != source])
 
-        # Generate dependency tag
-        self._dep_tag_counter += 1
-        dep_tag = self._dep_tag_counter
+            # Random amount, capped to avoid overdraft
+            max_amount = max(1, self._balances[source] // 10)
+            amount = self._rng.randint(1, max_amount)
 
-        block_id = self._rng.randint(0, self._total_blocks - 1)
-        data = os.urandom(self._block_size)
+            # Generate dependency tag
+            self._dep_tag_counter += 1
+            dep_tag = self._dep_tag_counter
 
-        # Step 1: DEBIT (CAUSE) — must complete before credit
-        debit_ts = self._get_timestamp()
-        await self._send_write_with_retry(
-            source, block_id, data, debit_ts,
-            dep_tag=dep_tag, role="CAUSE", partner=dest,
-            balance_delta=-amount,
-        )
+            block_id = self._rng.randint(0, self._total_blocks - 1)
+            data = os.urandom(self._block_size)
 
-        # Step 2: CREDIT (EFFECT) — only after debit ACK'd
-        credit_ts = self._get_timestamp()
-        await self._send_write_with_retry(
-            dest, block_id, data, credit_ts,
-            dep_tag=dep_tag, role="EFFECT", partner=source,
-            balance_delta=amount,
-        )
+            # Step 1: DEBIT (CAUSE) — must complete before credit
+            debit_ts = self._get_timestamp()
+            await self._send_write_with_retry(
+                source, block_id, data, debit_ts,
+                dep_tag=dep_tag, role="CAUSE", partner=dest,
+                balance_delta=-amount,
+            )
 
-        # Track for conservation validation
-        self._transfer_amounts[dep_tag] = amount
-        self._balances[source] -= amount
-        self._balances[dest] += amount
+            # Step 2: CREDIT (EFFECT) — only after debit ACK'd
+            credit_ts = self._get_timestamp()
+            await self._send_write_with_retry(
+                dest, block_id, data, credit_ts,
+                dep_tag=dep_tag, role="EFFECT", partner=source,
+                balance_delta=amount,
+            )
+
+            # Track for conservation validation
+            self._transfer_amounts[dep_tag] = amount
+            self._balances[source] -= amount
+            self._balances[dest] += amount
+        finally:
+            # Always mark transfer complete so drain() can proceed,
+            # even if the transfer failed mid-way
+            self._transfer_in_flight = False
+            self._transfer_idle.set()
 
     # ── Local write ─────────────────────────────────────────────────────
 

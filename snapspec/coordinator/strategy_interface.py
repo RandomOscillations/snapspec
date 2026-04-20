@@ -80,3 +80,16 @@ class CoordinatorProtocol(Protocol):
         Returns dict with recovery_success, node_results, balance_sum, etc.
         """
         ...
+
+    async def drain_workload(self) -> None:
+        """Drain in-flight workload transfers before pausing.
+
+        Blocks until any half-completed cross-node transfer (debit ACK'd,
+        credit pending) finishes. Prevents conservation violations in
+        pause-and-snap caused by capturing a mid-transfer state.
+        """
+        ...
+
+    def resume_workload(self) -> None:
+        """Re-enable cross-node transfers after drain."""
+        ...
