@@ -213,7 +213,7 @@ def build_table_lines(results: dict) -> list[str]:
         for strategy_name in results:
             val = results[strategy_name].get(key, float("nan"))
             if "rate" in key:
-                row += f"{'N/A' if val < 0 else f'{val:.1%}':>{col_w}}"
+                row += f"{'N/A' if (val is None or val < 0) else f'{val:.1%}':>{col_w}}"
             else:
                 row += f"{val:>{col_w}.2f}"
         lines.append(row)

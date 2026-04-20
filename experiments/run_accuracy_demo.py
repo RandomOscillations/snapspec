@@ -186,7 +186,7 @@ def plot_results(results: dict):
     ax.set_ylabel("Fraction of snapshots", fontsize=9)
     ax.set_ylim(0, 1.15)
     for bar_, val, raw in zip(bars, causal_display, causal_rates):
-        label = "trivially\nconsistent" if raw < 0 else f"{val:.1%}"
+        label = "trivially\nconsistent" if (raw is None or raw < 0) else f"{val:.1%}"
         ax.text(bar_.get_x() + bar_.get_width() / 2,
                 bar_.get_height() + 0.02,
                 label, ha="center", va="bottom", fontsize=8)
@@ -195,14 +195,14 @@ def plot_results(results: dict):
 
     # 2. Conservation validity rate
     cons_rates = [results[s]["conservation_validity_rate"] for s in strategies]
-    cons_display = [v if v >= 0 else 0.0 for v in cons_rates]
+    cons_display = [v if (v is not None and v >= 0) else 0.0 for v in cons_rates]
     ax = axes[0][1]
     bars = ax.bar(labels, cons_display, color=colors, edgecolor="white", linewidth=0.8)
     ax.set_title("Conservation Validity Rate", fontsize=11)
     ax.set_ylabel("Fraction of snapshots", fontsize=9)
     ax.set_ylim(0, 1.15)
     for bar_, val, raw in zip(bars, cons_display, cons_rates):
-        label = "N/A" if raw < 0 else f"{val:.1%}"
+        label = "N/A" if (raw is None or raw < 0) else f"{val:.1%}"
         ax.text(bar_.get_x() + bar_.get_width() / 2,
                 bar_.get_height() + 0.02,
                 label, ha="center", va="bottom", fontsize=8)
@@ -234,7 +234,7 @@ def plot_results(results: dict):
     ax.set_ylabel("Fraction recoverable", fontsize=9)
     ax.set_ylim(0, 1.15)
     for bar_, val, raw in zip(bars, recovery_display, recovery_rates):
-        label = "N/A" if raw < 0 else f"{val:.1%}"
+        label = "N/A" if (raw is None or raw < 0) else f"{val:.1%}"
         ax.text(bar_.get_x() + bar_.get_width() / 2,
                 bar_.get_height() + 0.02,
                 label, ha="center", va="bottom", fontsize=8)
@@ -250,7 +250,7 @@ def plot_results(results: dict):
     ax.set_ylabel("Fraction conserved", fontsize=9)
     ax.set_ylim(0, 1.15)
     for bar_, val, raw in zip(bars, rc_display, rc_rates):
-        label = "N/A" if raw < 0 else f"{val:.1%}"
+        label = "N/A" if (raw is None or raw < 0) else f"{val:.1%}"
         ax.text(bar_.get_x() + bar_.get_width() / 2,
                 bar_.get_height() + 0.02,
                 label, ha="center", va="bottom", fontsize=8)
@@ -308,7 +308,7 @@ def print_table(results: dict):
         for s in results:
             val = results[s].get(key, float("nan"))
             if "rate" in key:
-                row += f"{'N/A' if val < 0 else f'{val:.1%}':>{col_w}}"
+                row += f"{'N/A' if (val is None or val < 0) else f'{val:.1%}':>{col_w}}"
             else:
                 row += f"{val:>{col_w}.2f}"
         print(row)

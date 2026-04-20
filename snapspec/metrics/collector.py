@@ -295,7 +295,7 @@ class MetricsCollector:
                 sum(s.causal_violation_count for s in causal_checked) / len(causal_checked)
             )
         else:
-            summary["causal_consistency_rate"] = -1.0   # not checked
+            summary["causal_consistency_rate"] = None   # not checked
             summary["causal_checked_count"] = 0.0
             summary["avg_causal_violation_count"] = 0.0
 
@@ -307,7 +307,7 @@ class MetricsCollector:
             summary["conservation_validity_rate"] = conservation_valid_count / len(conservation_checked)
             summary["conservation_checked_count"] = float(len(conservation_checked))
         else:
-            summary["conservation_validity_rate"] = -1.0  # not checked
+            summary["conservation_validity_rate"] = None  # not checked
             summary["conservation_checked_count"] = 0.0
 
         # Recovery metrics
@@ -324,11 +324,11 @@ class MetricsCollector:
                 rc_ok = sum(1 for s in rc_checked if s.recovery_conservation_holds)
                 summary["recovery_conservation_rate"] = rc_ok / len(rc_checked)
             else:
-                summary["recovery_conservation_rate"] = -1.0
+                summary["recovery_conservation_rate"] = None
         else:
-            summary["recovery_rate"] = -1.0
+            summary["recovery_rate"] = None
             summary["recovery_checked_count"] = 0.0
-            summary["recovery_conservation_rate"] = -1.0
+            summary["recovery_conservation_rate"] = None
 
         return summary
 
@@ -345,7 +345,7 @@ class MetricsCollector:
                 "param_value": self.param_value,
                 "rep": str(self.rep),
                 "metric": metric,
-                "value": str(value),
+                "value": "N/A" if value is None else str(value),
             })
         return rows
 
