@@ -111,6 +111,11 @@ async def _spawn_node(
     archive_dir = config.get("archive_dir", "/tmp/snapspec_archives")
     os.makedirs(archive_dir, exist_ok=True)
 
+    # Clear stale runtime state from previous runs so initial_balance is respected
+    state_file = os.path.join(archive_dir, f"node{node_id}_runtime_state.json")
+    if os.path.exists(state_file):
+        os.remove(state_file)
+
     proc = await asyncio.create_subprocess_exec(
         sys.executable, "-m", "snapspec.node",
         "--id", str(node_id),
