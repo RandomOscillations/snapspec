@@ -161,6 +161,10 @@ class MySQLStorageNode(StorageNode):
     async def _handle_commit(self, msg: dict, writer):
         ts = msg["logical_timestamp"]
 
+        # Capture snapshot state under the lock, then do heavy MySQL I/O outside.
+        # The archive reads from the snapshot connection (MVCC frozen view), so
+        # it is safe to run concurrently with new writes — new writes go to the
+        # live tables, not the snapshot view.
         async with self._state_lock:
             if self.state not in (NodeState.PREPARED, NodeState.SNAPPED):
                 await self._send_error(
@@ -169,18 +173,23 @@ class MySQLStorageNode(StorageNode):
                 )
                 return
 
-            await self._mysql_bs.archive_snapshot_async(self.snapshot_ts, self._snapshot_conn)
-            self._archive_balances[f"mysql://node{self.node_id}/snap/{self.snapshot_ts}"] = (
-                self._snapshot_balance if self._snapshot_balance is not None else self._balance
-            )
-            await self._close_snapshot_view()
+            # Grab what we need, then release the lock so writes can proceed
+            snapshot_ts = self.snapshot_ts
+            snapshot_conn = self._snapshot_conn
+            snapshot_balance = self._snapshot_balance if self._snapshot_balance is not None else self._balance
 
+            # Transition state immediately — writes can resume
             self._mysql_bs.commit_snapshot()
             self._writes_paused = False
             self.state = NodeState.IDLE
             self._snapshot_balance = None
 
-        logger.debug("Node %d: COMMITTED (MySQL) snapshot ts=%d", self.node_id, self.snapshot_ts)
+        # Heavy MySQL archival OUTSIDE the lock — writes are not blocked
+        await self._mysql_bs.archive_snapshot_async(snapshot_ts, snapshot_conn)
+        self._archive_balances[f"mysql://node{self.node_id}/snap/{snapshot_ts}"] = snapshot_balance
+        await self._close_snapshot_view()
+
+        logger.debug("Node %d: COMMITTED (MySQL) snapshot ts=%d", self.node_id, snapshot_ts)
         await self._send(writer, MessageType.ACK, ts)
 
     async def _handle_abort(self, msg: dict, writer):
