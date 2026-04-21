@@ -75,14 +75,15 @@ class MockBlockStore:
         self._blocks[block_id] = data
         if self._snapshot_active:
             self._delta_count += 1
-            if timestamp > self._snapshot_ts:
-                self._write_log.append(_MockWriteLogEntry(
-                    block_id=block_id,
-                    timestamp=timestamp,
-                    dependency_tag=dep_tag,
-                    role=role,
-                    partner_node_id=partner,
-                ))
+            # Log ALL writes during active snapshot — they are NOT in the
+            # snapshot (snapshot was frozen at create_snapshot time).
+            self._write_log.append(_MockWriteLogEntry(
+                block_id=block_id,
+                timestamp=timestamp,
+                dependency_tag=dep_tag,
+                role=role,
+                partner_node_id=partner,
+            ))
 
     def create_snapshot(self, snapshot_ts: int):
         assert not self._snapshot_active, "Cannot create snapshot: one is already active"

@@ -62,9 +62,8 @@ void FullCopyBlockStore::write(uint64_t block_id, const uint8_t* data,
     if (snapshot_active_) {
         writes_during_snapshot_++;
 
-        if (timestamp > snapshot_ts_) {
-            write_log_.push_back({block_id, timestamp, dep_tag, role, partner});
-        }
+        // Log ALL writes during active snapshot.
+        write_log_.push_back({block_id, timestamp, dep_tag, role, partner});
     }
 }
 
