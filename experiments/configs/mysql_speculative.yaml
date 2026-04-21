@@ -1,0 +1,42 @@
+experiment: mysql_baseline
+config_name: mysql_speculative
+param_value: default
+
+num_nodes: 3
+strategy: speculative
+block_store_type: mysql
+
+duration_s: 60
+snapshot_interval_s: 5.0
+
+write_rate: 100
+cross_node_ratio: 0.2
+effect_delay_s: 0.0
+validation_grace_s: 0.05
+speculative_max_retries: 5
+
+total_tokens: 300000
+total_blocks: 100
+num_accounts: 100
+seed: 42
+
+mysql:
+  nodes:
+    - node_id: 0
+      host: mysql0
+      port: 3306
+      user: root
+      password: snapspec
+      database: snapspec_node_0
+    - node_id: 1
+      host: mysql1
+      port: 3306
+      user: root
+      password: snapspec
+      database: snapspec_node_1
+    - node_id: 2
+      host: mysql2
+      port: 3306
+      user: root
+      password: snapspec
+      database: snapspec_node_2

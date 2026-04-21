@@ -81,8 +81,8 @@ void COWBlockStore::write(uint64_t block_id, const uint8_t* data,
         active_file_.write(reinterpret_cast<const char*>(data), block_size_);
         active_file_.flush();
 
-        // Log if within snapshot window
-        if (timestamp <= snapshot_ts_ && timestamp > 0) {
+        // Log writes that occurred after the snapshot boundary.
+        if (timestamp > snapshot_ts_) {
             write_log_.push_back({block_id, timestamp, dep_tag, role, partner});
         }
     } else {
@@ -153,6 +153,9 @@ void COWBlockStore::commit_snapshot(const std::string& archive_path) {
     }
     snapshot_file_.flush();
     snapshot_file_.close();
+
+    std::filesystem::create_directories(
+        std::filesystem::path(archive_path).parent_path());
 
     // Move completed snapshot to archive location
     std::filesystem::rename(snapshot_path_, archive_path);

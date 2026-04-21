@@ -15,7 +15,10 @@ from typing import Protocol, Any
 class SnapshotResult:
     """Return type for all strategy execute() functions."""
     success: bool
+    skipped: bool = False
     retries: int = 0
+    participant_node_ids: list[int] | None = None
+    failure_reason: str | None = None
     delta_blocks_at_discard: list[int] | None = None
     # Accuracy fields — populated by each strategy
     causal_consistent: bool | None = None       # None = not checked (e.g. trivially true)
@@ -33,6 +36,7 @@ class CoordinatorProtocol(Protocol):
     # --- Config ---
     speculative_max_retries: int
     validation_timeout_s: float
+    validation_grace_s: float
     delta_size_threshold_frac: float
     total_blocks_per_node: int
 
@@ -44,7 +48,13 @@ class CoordinatorProtocol(Protocol):
         """Increment and return the logical clock. Thread-safe."""
         ...
 
-    async def send_all(self, msg_type: str, ts: int, **kwargs) -> list[dict[str, Any]]:
+    async def send_all(
+        self,
+        msg_type: str,
+        ts: int,
+        node_ids: list[int] | None = None,
+        **kwargs,
+    ) -> list[dict[str, Any]]:
         """Send a message to ALL nodes in parallel, return list of responses.
 
         Each response is a dict with at least a "type" key.
@@ -52,31 +62,64 @@ class CoordinatorProtocol(Protocol):
         """
         ...
 
-    async def collect_write_logs_parallel(self, ts: int) -> list[list[dict[str, Any]]]:
+    async def collect_write_logs_parallel(
+        self,
+        ts: int,
+        node_ids: list[int] | None = None,
+    ) -> tuple[list[list[dict[str, Any]]], list[int]]:
         """Collect write logs from all nodes in parallel.
 
-        Sends GET_WRITE_LOG with snapshot_ts=ts. Each node returns only entries
-        with timestamp <= ts. Returns list-of-lists (one inner list per node).
+        Fetches each node's post-snapshot write log. The storage backend is
+        responsible for logging only writes that occur after snapshot creation.
+        Returns list-of-lists (one inner list per node).
 
         Each write log entry dict has keys:
           block_id, timestamp, dependency_tag, role ("CAUSE"|"EFFECT"|"NONE"), partner_node_id
+        Returns:
+            (all_logs, responding_node_ids)
         """
         ...
 
     async def collect_write_logs_and_balances_parallel(
-        self, ts: int
-    ) -> tuple[list[list[dict[str, Any]]], list[int]]:
+        self,
+        ts: int,
+        node_ids: list[int] | None = None,
+    ) -> tuple[list[list[dict[str, Any]]], list[int], list[int]]:
         """Like collect_write_logs_parallel but also returns per-node snapshot balances.
 
         Returns:
-            (all_logs, snapshot_balances) where snapshot_balances[i] is the balance
-            node i held at the moment its snapshot was taken.
+            (all_logs, snapshot_balances, responding_node_ids) where
+            snapshot_balances[i] is the balance of responding_node_ids[i].
         """
         ...
 
-    async def verify_snapshot_recovery(self, snapshot_ts: int) -> dict:
+    async def verify_snapshot_recovery(
+        self,
+        snapshot_ts: int,
+        node_ids: list[int] | None = None,
+    ) -> dict:
         """Verify that a committed snapshot can be fully recovered from archives.
 
         Returns dict with recovery_success, node_results, balance_sum, etc.
         """
+        ...
+
+    def get_snapshot_participants(self) -> list[int]:
+        """Return the healthy node IDs that should participate in a new snapshot."""
+        ...
+
+    def minimum_snapshot_nodes(self) -> int:
+        """Return the minimum number of nodes required to attempt a snapshot."""
+        ...
+
+    def expected_total_for_participants(self, node_ids: list[int]) -> int:
+        """Return adjusted conservation total for a partial snapshot."""
+        ...
+
+    async def drain_workload(self) -> None:
+        """Drain in-flight workload transfers before pausing."""
+        ...
+
+    def resume_workload(self) -> None:
+        """Re-enable cross-node transfers after drain."""
         ...

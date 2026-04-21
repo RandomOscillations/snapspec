@@ -23,6 +23,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
 from snapspec.coordinator.coordinator import Coordinator
+from snapspec.logging_utils import configure_logging
 from snapspec.workload.generator import WorkloadGenerator
 from snapspec.metrics.collector import MetricsCollector
 
@@ -30,6 +31,40 @@ logger = logging.getLogger(__name__)
 
 # Timeout for node startup
 _NODE_STARTUP_TIMEOUT_S = 10.0
+
+
+def create_mysql_nodes(config: dict):
+    """Create in-process MySQL-backed nodes from a config's mysql section."""
+    from snapspec.mysql.node import MySQLStorageNode
+
+    mysql_cfg = config["mysql"]
+    num_nodes = config["num_nodes"]
+    num_accounts = config.get("num_accounts", config.get("total_blocks", 256))
+    total_tokens = config.get("total_tokens", 1_000_000)
+
+    nodes = []
+    for i in range(num_nodes):
+        node_cfg = mysql_cfg["nodes"][i]
+        initial_balance = total_tokens // num_nodes
+        if i == 0:
+            initial_balance += total_tokens - initial_balance * num_nodes
+        nodes.append(
+            MySQLStorageNode(
+                node_id=node_cfg["node_id"],
+                host="127.0.0.1",
+                port=0,
+                mysql_config={
+                    "host": node_cfg["host"],
+                    "port": node_cfg.get("port", 3306),
+                    "user": node_cfg["user"],
+                    "password": node_cfg["password"],
+                    "database": node_cfg["database"],
+                },
+                num_accounts=num_accounts,
+                initial_balance=initial_balance,
+            )
+        )
+    return nodes
 
 
 def get_strategy(name: str):
@@ -74,6 +109,12 @@ async def _spawn_node(
     balance = str(total_tokens // num_nodes)
     data_dir = config.get("data_dir", "/tmp/snapspec_data")
     archive_dir = config.get("archive_dir", "/tmp/snapspec_archives")
+    os.makedirs(archive_dir, exist_ok=True)
+
+    # Clear stale runtime state from previous runs so initial_balance is respected
+    state_file = os.path.join(archive_dir, f"node{node_id}_runtime_state.json")
+    if os.path.exists(state_file):
+        os.remove(state_file)
 
     proc = await asyncio.create_subprocess_exec(
         sys.executable, "-m", "snapspec.node",
@@ -151,18 +192,37 @@ async def run_single(config: dict, rep: int, output_dir: str) -> str:
     """
     num_nodes = config["num_nodes"]
     total_tokens = config.get("total_tokens", 1_000_000)
+    bs_type = config.get("block_store_type", "mock")
 
-    # 1. Spawn storage nodes as separate processes
+    # 1. Start storage nodes
     node_procs = []
     node_configs = []
-    try:
-        for i in range(num_nodes):
-            proc, ncfg = await _spawn_node(i, config, total_tokens, num_nodes)
-            node_procs.append(proc)
-            node_configs.append(ncfg)
-    except Exception:
-        await _stop_nodes(node_procs)
-        raise
+    mysql_nodes = []
+    if bs_type == "mysql":
+        mysql_nodes = create_mysql_nodes(config)
+        try:
+            for node in mysql_nodes:
+                await node.start()
+        except Exception:
+            for node in mysql_nodes:
+                try:
+                    await node.stop()
+                except Exception:
+                    pass
+            raise
+        node_configs = [
+            {"node_id": node.node_id, "host": "127.0.0.1", "port": node.actual_port}
+            for node in mysql_nodes
+        ]
+    else:
+        try:
+            for i in range(num_nodes):
+                proc, ncfg = await _spawn_node(i, config, total_tokens, num_nodes)
+                node_procs.append(proc)
+                node_configs.append(ncfg)
+        except Exception:
+            await _stop_nodes(node_procs)
+            raise
 
     try:
         # 2. Create metrics collector
@@ -181,7 +241,18 @@ async def run_single(config: dict, rep: int, output_dir: str) -> str:
             snapshot_interval_s=config.get("snapshot_interval_s", 10.0),
             on_snapshot_complete=metrics.on_snapshot_complete,
             total_blocks_per_node=config.get("total_blocks", 256),
+            speculative_max_retries=int(config.get("speculative_max_retries", 5)),
+            operation_timeout_s=float(config.get("operation_timeout_s", 5.0)),
+            validation_grace_s=float(config.get("validation_grace_s", 0.0)),
+            health_check_interval_s=float(config.get("health_check_interval_s", 3.0)),
+            health_check_timeout_s=float(config.get("health_check_timeout_s", 1.5)),
+            health_unhealthy_after_s=float(config.get("health_unhealthy_after_s", 10.0)),
+            status_interval_s=float(config.get("status_interval_s", 5.0)),
+            min_snapshot_nodes=config.get("min_snapshot_nodes"),
+            shutdown_timeout_s=float(config.get("shutdown_timeout_s", 30.0)),
+            shutdown_nodes_on_stop=bool(config.get("shutdown_nodes_on_stop", False)),
         )
+        coordinator.expected_total = total_tokens
         await coordinator.start()
 
         # 4. Create workload generator (shares coordinator's clock)
@@ -194,8 +265,12 @@ async def run_single(config: dict, rep: int, output_dir: str) -> str:
             block_size=config.get("block_size", 4096),
             total_blocks=config.get("total_blocks", 256),
             seed=config.get("seed"),
+            effect_delay_s=config.get("effect_delay_s", 0.0),
         )
         await workload.start()
+        coordinator.set_workload(workload)
+        coordinator.transfer_amounts = workload._transfer_amounts
+        coordinator.attach_status_sources(workload, metrics)
 
         # 5. Start continuous sampling
         await metrics.start_continuous_sampling(workload)
@@ -222,8 +297,12 @@ async def run_single(config: dict, rep: int, output_dir: str) -> str:
         await coordinator.stop()
 
     finally:
-        # 8. Stop all node processes
-        await _stop_nodes(node_procs)
+        # 8. Stop nodes
+        if mysql_nodes:
+            for node in mysql_nodes:
+                await node.stop()
+        else:
+            await _stop_nodes(node_procs)
 
     # 9. Export
     os.makedirs(output_dir, exist_ok=True)
@@ -254,10 +333,9 @@ def main():
     parser.add_argument("--output", default="results/", help="Output directory")
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
-    )
+    log_path = configure_logging(default_basename="experiment_runner")
+    if log_path:
+        logger.info("Experiment logs are also being written to %s", log_path)
 
     try:
         import yaml

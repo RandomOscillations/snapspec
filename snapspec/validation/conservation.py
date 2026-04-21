@@ -26,6 +26,8 @@ class ConservationResult:
     in_transit_total: int
     balance_sum: int
     detail: str
+    in_transit_tags: list[int]
+    post_role_samples: list[str]
 
 
 def validate_conservation(
@@ -33,6 +35,7 @@ def validate_conservation(
     all_node_logs: list[list[dict]],
     transfer_amounts: dict[int, int],
     expected_total: int,
+    participating_node_ids: set[int] | None = None,
 ) -> ConservationResult:
     """Validate token conservation across a snapshot.
 
@@ -55,21 +58,40 @@ def validate_conservation(
     #
     # Build tag -> set of roles that are POST-snapshot (in the logs)
     tag_to_post_roles: dict[int, set[str]] = defaultdict(set)
+    skipped_tags: set[int] = set()
     for node_log in all_node_logs:
         for entry in node_log:
             tag = entry.get("dependency_tag", 0)
             role = entry.get("role", "NONE")
             if tag == 0 or role == "NONE":
                 continue
+            if participating_node_ids is not None:
+                node_id = entry.get("node_id")
+                partner_node_id = entry.get("partner_node_id")
+                if (
+                    node_id not in participating_node_ids
+                    or partner_node_id not in participating_node_ids
+                ):
+                    skipped_tags.add(tag)
+                    continue
             tag_to_post_roles[tag].add(role)
 
     in_transit_total = 0
+    in_transit_tags: list[int] = []
     for tag, post_roles in tag_to_post_roles.items():
+        if tag in skipped_tags:
+            continue
         # In-transit: debit applied (CAUSE pre-snap, not in logs) but credit pending (EFFECT post-snap, in logs)
         # This means EFFECT is in post_roles but CAUSE is not
         if "EFFECT" in post_roles and "CAUSE" not in post_roles:
             amount = transfer_amounts.get(tag, 0)
             in_transit_total += amount
+            in_transit_tags.append(tag)
+
+    post_role_samples = [
+        f"tag={tag}:roles={','.join(sorted(post_roles))}:amount={transfer_amounts.get(tag, 0)}"
+        for tag, post_roles in sorted(tag_to_post_roles.items())[:10]
+    ]
 
     observed_total = balance_sum + in_transit_total
 
@@ -81,6 +103,8 @@ def validate_conservation(
             in_transit_total=in_transit_total,
             balance_sum=balance_sum,
             detail=f"Conservation holds: {balance_sum} (balances) + {in_transit_total} (in-transit) = {expected_total}",
+            in_transit_tags=in_transit_tags,
+            post_role_samples=post_role_samples,
         )
     else:
         return ConservationResult(
@@ -93,4 +117,6 @@ def validate_conservation(
                 f"Conservation VIOLATED: {balance_sum} (balances) + {in_transit_total} (in-transit) "
                 f"= {observed_total}, expected {expected_total}, diff = {observed_total - expected_total}"
             ),
+            in_transit_tags=in_transit_tags,
+            post_role_samples=post_role_samples,
         )

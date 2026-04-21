@@ -35,6 +35,7 @@ class CausalViolation:
 
 def validate_causal(
     all_node_logs: list[list[dict]],
+    participating_node_ids: set[int] | None = None,
 ) -> tuple[ValidationResult, list[CausalViolation]]:
     """Validate causal consistency across all node write logs.
 
@@ -50,6 +51,7 @@ def validate_causal(
     # Build map: dependency_tag -> set of roles that appear in the logs
     # (i.e., roles that are POST-snapshot / NOT in the snapshot)
     tag_to_roles: dict[int, set[str]] = defaultdict(set)
+    skipped_tags: set[int] = set()
 
     for node_log in all_node_logs:
         for entry in node_log:
@@ -57,10 +59,21 @@ def validate_causal(
             role = entry.get("role", "NONE")
             if tag == 0 or role == "NONE":
                 continue  # Local write, no dependency to validate
+            if participating_node_ids is not None:
+                node_id = entry.get("node_id")
+                partner_node_id = entry.get("partner_node_id")
+                if (
+                    node_id not in participating_node_ids
+                    or partner_node_id not in participating_node_ids
+                ):
+                    skipped_tags.add(tag)
+                    continue
             tag_to_roles[tag].add(role)
 
     violations = []
     for tag, roles in tag_to_roles.items():
+        if tag in skipped_tags:
+            continue
         if roles == {"CAUSE", "EFFECT"}:
             # Both post-snapshot → neither in snapshot → consistent
             continue

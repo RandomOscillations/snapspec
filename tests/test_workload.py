@@ -120,6 +120,24 @@ class TestCrossNodeTransfer:
             assert amount > 0, "transfer amount should be positive"
 
     @pytest.mark.asyncio
+    async def test_transfer_registered_before_credit(self, nodes):
+        wl = WorkloadGenerator(
+            _node_configs(nodes), write_rate=100, cross_node_ratio=1.0,
+            get_timestamp=_make_clock(), total_tokens=30_000,
+            block_size=64, total_blocks=32, seed=42, effect_delay_s=0.05,
+        )
+        await wl.start()
+
+        task = asyncio.create_task(wl._do_cross_node_transfer())
+        await asyncio.sleep(0.02)
+
+        # Transfer amount is recorded before credit is sent (effect_delay_s=0.05)
+        assert len(wl._transfer_amounts) >= 1, "Transfer should be tracked while credit is still pending"
+
+        await task
+        await wl.stop()
+
+    @pytest.mark.asyncio
     async def test_debit_before_credit_ordering(self, nodes):
         """FM3: Verify CAUSE timestamp < EFFECT timestamp for every transfer."""
         wl = WorkloadGenerator(
@@ -134,9 +152,9 @@ class TestCrossNodeTransfer:
             await c.connect()
             coord_conn[n.node_id] = c
 
-        # Create snapshot with high ts so all writes are logged
+        # Create snapshot with a low boundary so all subsequent writes are logged
         for nid, c in coord_conn.items():
-            await c.send_and_receive(MessageType.SNAP_NOW, 999999, snapshot_ts=999999)
+            await c.send_and_receive(MessageType.SNAP_NOW, 0, snapshot_ts=0)
 
         await wl.start()
         await asyncio.sleep(0.3)
@@ -145,9 +163,7 @@ class TestCrossNodeTransfer:
         # Collect write logs from all nodes
         all_entries = []
         for nid, c in coord_conn.items():
-            resp = await c.send_and_receive(
-                MessageType.GET_WRITE_LOG, 999999, max_timestamp=999999,
-            )
+            resp = await c.send_and_receive(MessageType.GET_WRITE_LOG, 999999)
             if resp and "entries" in resp:
                 all_entries.extend(resp["entries"])
             await c.send_and_receive(MessageType.ABORT, 999999)

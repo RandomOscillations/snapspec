@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import tempfile
 import pytest
+import pytest_asyncio
 
 from snapspec.network.connection import NodeConnection
 from snapspec.network.protocol import MessageType
@@ -22,13 +24,15 @@ from snapspec.node.server import StorageNode, NodeState, MockBlockStore
 
 # ── Helpers ─────────────────────────────────────────────────────────────
 
-async def _start_node(block_store, node_id=0, initial_balance=1000) -> StorageNode:
+async def _start_node(block_store, node_id=0, initial_balance=1000, archive_dir=None) -> StorageNode:
+    if archive_dir is None:
+        archive_dir = tempfile.mkdtemp(prefix=f"snapspec_test_node{node_id}_")
     node = StorageNode(
         node_id=node_id,
         host="127.0.0.1",
         port=0,
         block_store=block_store,
-        archive_dir="/tmp/snapspec_test_archives",
+        archive_dir=archive_dir,
         initial_balance=initial_balance,
     )
     await node.start()
@@ -123,9 +127,7 @@ class TestSnapshotTimeBalance:
             assert resp["type"] == "WRITE_ACK"
 
             # GET_WRITE_LOG should return snapshot-time balance (5000), not live (4900)
-            resp = await conn.send_and_receive(
-                MessageType.GET_WRITE_LOG, 3, max_timestamp=3
-            )
+            resp = await conn.send_and_receive(MessageType.GET_WRITE_LOG, 3)
             assert resp["type"] == "WRITE_LOG"
             assert resp["snapshot_balance"] == 5000
 
@@ -155,9 +157,7 @@ class TestSnapshotTimeBalance:
             )
 
             # GET_WRITE_LOG should return snapshot-time balance (3000), not live (3200)
-            resp = await conn.send_and_receive(
-                MessageType.GET_WRITE_LOG, 3, max_timestamp=3
-            )
+            resp = await conn.send_and_receive(MessageType.GET_WRITE_LOG, 3)
             assert resp["snapshot_balance"] == 3000
 
             await conn.send_and_receive(MessageType.COMMIT, 4)
@@ -313,6 +313,8 @@ class TestRecoveryIntegration:
                 snapshot_interval_s=1.0,
                 on_snapshot_complete=None,
                 total_blocks_per_node=16,
+                health_check_interval_s=9999,
+                status_interval_s=9999,
             )
             coordinator.expected_total = total_tokens
             coordinator.transfer_amounts = {}
@@ -368,6 +370,8 @@ class TestRecoveryIntegration:
                 strategy_fn=two_phase_execute,
                 snapshot_interval_s=1.0,
                 total_blocks_per_node=16,
+                health_check_interval_s=9999,
+                status_interval_s=9999,
             )
             coordinator.expected_total = total_tokens
             coordinator.transfer_amounts = {}
@@ -410,6 +414,8 @@ class TestRecoveryIntegration:
                 strategy_fn=spec_execute,
                 snapshot_interval_s=1.0,
                 total_blocks_per_node=16,
+                health_check_interval_s=9999,
+                status_interval_s=9999,
             )
             coordinator.expected_total = total_tokens
             coordinator.transfer_amounts = {}
@@ -452,6 +458,8 @@ class TestRecoveryIntegration:
                 strategy_fn=pause_execute,
                 snapshot_interval_s=1.0,
                 total_blocks_per_node=16,
+                health_check_interval_s=9999,
+                status_interval_s=9999,
             )
             # Set wrong expected total to trigger conservation failure
             coordinator.expected_total = total_tokens + 999

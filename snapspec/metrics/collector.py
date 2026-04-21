@@ -38,6 +38,7 @@ class _SnapshotRecord:
     snapshot_id: int
     logical_ts: int
     success: bool
+    skipped: bool
     retries: int
     duration_ms: float
     delta_blocks: list[int] | None
@@ -85,6 +86,7 @@ class MetricsCollector:
 
         self._sampling_task: asyncio.Task | None = None
         self._sampling_running = False
+        self._latest_throughput_wps: float = 0.0
 
     # ── Coordinator callback ────────────────────────────────────────────
 
@@ -100,6 +102,7 @@ class MetricsCollector:
             snapshot_id=snapshot_id,
             logical_ts=logical_ts,
             success=result.success,
+            skipped=result.skipped,
             retries=result.retries,
             duration_ms=duration_ms,
             delta_blocks=result.delta_blocks_at_discard,
@@ -109,6 +112,53 @@ class MetricsCollector:
             recovery_verified=result.recovery_verified,
             recovery_conservation_holds=result.recovery_conservation_holds,
         ))
+
+    def snapshot_counts(self) -> dict[str, int]:
+        considered = [s for s in self._snapshots if not s.skipped]
+        total = len(considered)
+        committed = sum(1 for s in considered if s.success)
+        retried = sum(1 for s in considered if s.retries > 0)
+        skipped = sum(1 for s in self._snapshots if s.skipped)
+        return {
+            "total": total,
+            "committed": committed,
+            "failed": total - committed,
+            "retried": retried,
+            "skipped": skipped,
+        }
+
+    def latest_throughput_wps(self) -> float:
+        return self._latest_throughput_wps
+
+    def latest_conservation_rate(self) -> float | None:
+        checked = [s for s in self._snapshots if s.conservation_holds is not None]
+        if not checked:
+            return None
+        ok = sum(1 for s in checked if s.conservation_holds)
+        return ok / len(checked)
+
+    def build_status_fields(
+        self,
+        *,
+        writes_completed: int,
+        healthy_nodes: int,
+        total_nodes: int,
+    ) -> dict[str, str]:
+        counts = self.snapshot_counts()
+        fields = {
+            "nodes": f"{healthy_nodes}/{total_nodes} healthy",
+            "writes": f"{writes_completed} ({self._latest_throughput_wps:.0f}/s)",
+            "snapshots": (
+                f"{counts['committed']} committed, "
+                f"{counts['failed']} failed, "
+                f"{counts['retried']} retried, "
+                f"{counts['skipped']} skipped"
+            ),
+        }
+        conservation_rate = self.latest_conservation_rate()
+        if conservation_rate is not None:
+            fields["conservation"] = f"{conservation_rate:.0%}"
+        return fields
 
     # ── Continuous sampling ─────────────────────────────────────────────
 
@@ -152,6 +202,7 @@ class MetricsCollector:
             current_writes = workload.writes_completed
             wps = (current_writes - prev_writes) / interval_s
             prev_writes = current_writes
+            self._latest_throughput_wps = wps
 
             cpu = proc.cpu_percent() if proc else -1.0
 
@@ -168,22 +219,24 @@ class MetricsCollector:
         summary: dict[str, float] = {}
 
         # Snapshot metrics
-        total = len(self._snapshots)
-        committed = sum(1 for s in self._snapshots if s.success)
+        considered = [s for s in self._snapshots if not s.skipped]
+        total = len(considered)
+        committed = sum(1 for s in considered if s.success)
         summary["snapshot_count"] = total
         summary["snapshot_committed"] = committed
+        summary["snapshot_skipped"] = sum(1 for s in self._snapshots if s.skipped)
         summary["snapshot_success_rate"] = committed / total if total > 0 else 0.0
 
         # Retry rate
         if total > 0:
             summary["avg_retry_rate"] = (
-                sum(s.retries for s in self._snapshots) / total
+                sum(s.retries for s in considered) / total
             )
         else:
             summary["avg_retry_rate"] = 0.0
 
         # Latency percentiles
-        durations = sorted(s.duration_ms for s in self._snapshots)
+        durations = sorted(s.duration_ms for s in considered)
         if durations:
             summary["avg_latency_ms"] = sum(durations) / len(durations)
             summary["p50_latency_ms"] = durations[len(durations) // 2]
@@ -231,7 +284,9 @@ class MetricsCollector:
             summary["max_delta_blocks_at_discard"] = 0.0
 
         # Accuracy metrics
-        causal_checked = [s for s in self._snapshots if s.causal_consistent is not None]
+        causal_checked = [
+            s for s in considered if s.causal_consistent is not None
+        ]
         if causal_checked:
             causal_consistent_count = sum(1 for s in causal_checked if s.causal_consistent)
             summary["causal_consistency_rate"] = causal_consistent_count / len(causal_checked)
@@ -240,21 +295,25 @@ class MetricsCollector:
                 sum(s.causal_violation_count for s in causal_checked) / len(causal_checked)
             )
         else:
-            summary["causal_consistency_rate"] = -1.0   # not checked
+            summary["causal_consistency_rate"] = None   # not checked
             summary["causal_checked_count"] = 0.0
             summary["avg_causal_violation_count"] = 0.0
 
-        conservation_checked = [s for s in self._snapshots if s.conservation_holds is not None]
+        conservation_checked = [
+            s for s in considered if s.conservation_holds is not None
+        ]
         if conservation_checked:
             conservation_valid_count = sum(1 for s in conservation_checked if s.conservation_holds)
             summary["conservation_validity_rate"] = conservation_valid_count / len(conservation_checked)
             summary["conservation_checked_count"] = float(len(conservation_checked))
         else:
-            summary["conservation_validity_rate"] = -1.0  # not checked
+            summary["conservation_validity_rate"] = None  # not checked
             summary["conservation_checked_count"] = 0.0
 
         # Recovery metrics
-        recovery_checked = [s for s in self._snapshots if s.recovery_verified is not None]
+        recovery_checked = [
+            s for s in considered if s.recovery_verified is not None
+        ]
         if recovery_checked:
             recovery_ok_count = sum(1 for s in recovery_checked if s.recovery_verified)
             summary["recovery_rate"] = recovery_ok_count / len(recovery_checked)
@@ -265,11 +324,11 @@ class MetricsCollector:
                 rc_ok = sum(1 for s in rc_checked if s.recovery_conservation_holds)
                 summary["recovery_conservation_rate"] = rc_ok / len(rc_checked)
             else:
-                summary["recovery_conservation_rate"] = -1.0
+                summary["recovery_conservation_rate"] = None
         else:
-            summary["recovery_rate"] = -1.0
+            summary["recovery_rate"] = None
             summary["recovery_checked_count"] = 0.0
-            summary["recovery_conservation_rate"] = -1.0
+            summary["recovery_conservation_rate"] = None
 
         return summary
 
@@ -286,7 +345,7 @@ class MetricsCollector:
                 "param_value": self.param_value,
                 "rep": str(self.rep),
                 "metric": metric,
-                "value": str(value),
+                "value": "N/A" if value is None else str(value),
             })
         return rows
 

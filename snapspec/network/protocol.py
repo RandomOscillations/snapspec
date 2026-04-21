@@ -44,6 +44,7 @@ class MessageType(str, Enum):
 
     # Node management
     RESET = "RESET"
+    SHUTDOWN = "SHUTDOWN"
 
 
 HEADER_SIZE = 4  # 4-byte length prefix

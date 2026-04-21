@@ -78,8 +78,8 @@ void ROWBlockStore::write(uint64_t block_id, const uint8_t* data,
             modified_blocks_.push_back(block_id);
         }
 
-        // Log if within snapshot window
-        if (timestamp <= snapshot_ts_ && timestamp > 0) {
+        // Log writes that occurred after the snapshot boundary.
+        if (timestamp > snapshot_ts_) {
             write_log_.push_back({block_id, timestamp, dep_tag, role, partner});
         }
     } else {
@@ -151,6 +151,9 @@ size_t ROWBlockStore::discard_snapshot() {
 void ROWBlockStore::commit_snapshot(const std::string& archive_path) {
     std::lock_guard<std::mutex> lock(mu_);
     assert(snapshot_active_ && "Cannot commit: no active snapshot");
+
+    std::filesystem::create_directories(
+        std::filesystem::path(archive_path).parent_path());
 
     // Strategy C (In-place commit):
     // 1. Copy base to archive — the base IS the snapshot, so this archives it

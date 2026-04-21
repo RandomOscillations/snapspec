@@ -62,7 +62,7 @@ void FullCopyBlockStore::write(uint64_t block_id, const uint8_t* data,
     if (snapshot_active_) {
         writes_during_snapshot_++;
 
-        if (timestamp <= snapshot_ts_ && timestamp > 0) {
+        if (timestamp > snapshot_ts_) {
             write_log_.push_back({block_id, timestamp, dep_tag, role, partner});
         }
     }
@@ -102,6 +102,9 @@ size_t FullCopyBlockStore::discard_snapshot() {
 void FullCopyBlockStore::commit_snapshot(const std::string& archive_path) {
     std::lock_guard<std::mutex> lock(mu_);
     assert(snapshot_active_ && "Cannot commit: no active snapshot");
+
+    std::filesystem::create_directories(
+        std::filesystem::path(archive_path).parent_path());
 
     // Snapshot file is already a complete copy — just move it to archive
     std::filesystem::rename(snapshot_path_, archive_path);
