@@ -198,7 +198,7 @@ class Coordinator:
 
         connections = self._select_connections(node_ids)
 
-        async def _collect_one(conn: NodeConnection) -> tuple[int, list[dict], int, bool]:
+        async def _collect_one(conn: NodeConnection) -> tuple[int, list[dict], int, dict, bool]:
             resp = await self._send_with_timeout(
                 conn,
                 MessageType.GET_WRITE_LOG,
@@ -207,13 +207,15 @@ class Coordinator:
                 error_context="Write log collection",
             )
             if resp is None:
-                return conn.node_id, [], 0, False
+                return conn.node_id, [], 0, {}, False
             entries = [
                 {**entry, "node_id": conn.node_id}
                 for entry in resp.get("entries", [])
             ]
             snapshot_balance = resp.get("snapshot_balance", resp.get("balance", 0))
-            return conn.node_id, entries, snapshot_balance, True
+            # Collect transfer_amounts from node-local workloads
+            node_transfers = resp.get("transfer_amounts", {})
+            return conn.node_id, entries, snapshot_balance, node_transfers, True
 
         pairs = await asyncio.gather(
             *[_collect_one(c) for c in connections]
@@ -221,12 +223,16 @@ class Coordinator:
         all_logs = []
         snapshot_balances = []
         responding_node_ids = []
-        for node_id, entries, snapshot_balance, ok in pairs:
+        for node_id, entries, snapshot_balance, node_transfers, ok in pairs:
             if not ok:
                 continue
             responding_node_ids.append(node_id)
             all_logs.append(entries)
             snapshot_balances.append(snapshot_balance)
+            # Merge node-local transfer_amounts into coordinator's global view
+            if node_transfers:
+                for tag, amount in node_transfers.items():
+                    self.transfer_amounts[int(tag)] = int(amount)
 
         self._update_last_known_balances(responding_node_ids, snapshot_balances)
         return all_logs, snapshot_balances, responding_node_ids
