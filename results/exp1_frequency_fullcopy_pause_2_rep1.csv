@@ -1,0 +1,13 @@
+experiment,config,param_value,rep,metric,value
+exp1_frequency,fullcopy_pause,2,1,snapshot_count,3
+exp1_frequency,fullcopy_pause,2,1,snapshot_committed,1
+exp1_frequency,fullcopy_pause,2,1,snapshot_success_rate,0.3333333333333333
+exp1_frequency,fullcopy_pause,2,1,avg_retry_rate,0.0
+exp1_frequency,fullcopy_pause,2,1,avg_latency_ms,3.9673196151852608
+exp1_frequency,fullcopy_pause,2,1,p50_latency_ms,3.583791898563504
+exp1_frequency,fullcopy_pause,2,1,p99_latency_ms,4.875666927546263
+exp1_frequency,fullcopy_pause,2,1,max_latency_ms,4.875666927546263
+exp1_frequency,fullcopy_pause,2,1,avg_throughput_writes_sec,296.5
+exp1_frequency,fullcopy_pause,2,1,avg_coordinator_cpu_pct,7.966666666666666
+exp1_frequency,fullcopy_pause,2,1,avg_delta_blocks_at_discard,0.0
+exp1_frequency,fullcopy_pause,2,1,max_delta_blocks_at_discard,0.0

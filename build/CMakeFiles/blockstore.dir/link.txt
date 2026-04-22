@@ -1,0 +1,2 @@
+/usr/bin/ar qc libblockstore.a CMakeFiles/blockstore.dir/src/blockstore/row.cpp.o CMakeFiles/blockstore.dir/src/blockstore/cow.cpp.o CMakeFiles/blockstore.dir/src/blockstore/fullcopy.cpp.o
+/usr/bin/ranlib libblockstore.a

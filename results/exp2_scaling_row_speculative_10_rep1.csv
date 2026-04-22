@@ -1,0 +1,13 @@
+experiment,config,param_value,rep,metric,value
+exp2_scaling,row_speculative,10,1,snapshot_count,1
+exp2_scaling,row_speculative,10,1,snapshot_committed,1
+exp2_scaling,row_speculative,10,1,snapshot_success_rate,1.0
+exp2_scaling,row_speculative,10,1,avg_retry_rate,0.0
+exp2_scaling,row_speculative,10,1,avg_latency_ms,8.217292139306664
+exp2_scaling,row_speculative,10,1,p50_latency_ms,8.217292139306664
+exp2_scaling,row_speculative,10,1,p99_latency_ms,8.217292139306664
+exp2_scaling,row_speculative,10,1,max_latency_ms,8.217292139306664
+exp2_scaling,row_speculative,10,1,avg_throughput_writes_sec,894.4
+exp2_scaling,row_speculative,10,1,avg_coordinator_cpu_pct,17.77
+exp2_scaling,row_speculative,10,1,avg_delta_blocks_at_discard,0.0
+exp2_scaling,row_speculative,10,1,max_delta_blocks_at_discard,0.0

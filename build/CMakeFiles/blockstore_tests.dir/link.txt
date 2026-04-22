@@ -1,0 +1,1 @@
+/usr/bin/c++  -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/blockstore_tests.dir/src/tests/row_test.cpp.o CMakeFiles/blockstore_tests.dir/src/tests/cow_test.cpp.o CMakeFiles/blockstore_tests.dir/src/tests/fullcopy_test.cpp.o -o blockstore_tests  libblockstore.a lib/libgtest_main.a lib/libgtest.a
