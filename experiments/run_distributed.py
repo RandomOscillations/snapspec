@@ -262,9 +262,6 @@ async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> tu
     except asyncio.CancelledError:
         pass
 
-    if workload:
-        await workload.stop()
-        await metrics.stop_continuous_sampling()
     await coordinator.stop()
 
     summary = metrics.compute_summary()

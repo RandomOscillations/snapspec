@@ -332,7 +332,9 @@ class TestWriteLog:
             entries = resp["entries"]
             assert len(entries) == 1
             assert entries[0]["dependency_tag"] == 2
-            assert entries[0]["timestamp"] == 21
+            # Timestamp is the node's HLC at write processing time (not the
+            # sender's original timestamp). It must be > 0 (valid HLC value).
+            assert entries[0]["timestamp"] > 0
 
             # Clean up
             await conn.send_and_receive(MessageType.ABORT, 23)

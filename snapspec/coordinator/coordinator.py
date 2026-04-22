@@ -19,6 +19,7 @@ import logging
 import time
 from typing import Any, Callable
 
+from ..hlc import HybridLogicalClock
 from ..logging_utils import log_event
 from ..metadata.registry import SnapshotMetadataRegistry, SnapshotMetadataRow
 from ..network.protocol import MessageType
@@ -98,8 +99,8 @@ class Coordinator:
         # Also expose as a dict for convenience
         self.connections: dict[int, NodeConnection] = {}
 
-        # Logical clock and snapshot counter
-        self._logical_clock: int = 0
+        # Hybrid Logical Clock and snapshot counter
+        self._hlc = HybridLogicalClock()
         self._snapshot_counter: int = 0
 
         # Snapshot loop control
@@ -125,9 +126,8 @@ class Coordinator:
     # ── CoordinatorProtocol methods ─────────────────────────────────────
 
     def tick(self) -> int:
-        """Increment and return the logical clock."""
-        self._logical_clock += 1
-        return self._logical_clock
+        """Advance and return the HLC timestamp."""
+        return self._hlc.tick()
 
     async def send_all(
         self, msg_type: str, ts: int, node_ids: list[int] | None = None, **kwargs
@@ -669,6 +669,10 @@ class Coordinator:
                 )
                 return None
             self._mark_healthy(conn.node_id)
+            # Merge HLC with the response timestamp
+            remote_ts = resp.get("logical_timestamp", 0)
+            if remote_ts:
+                self._hlc.receive(remote_ts)
             return resp
         except asyncio.TimeoutError:
             await conn.close()

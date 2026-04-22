@@ -28,6 +28,7 @@ import time
 from enum import Enum
 from typing import Any
 
+from ..hlc import HybridLogicalClock
 from ..logging_utils import log_event
 from ..network.protocol import MessageType, encode_message, read_message
 
@@ -204,6 +205,9 @@ class StorageNode:
         self._balance = initial_balance
         self._snapshot_balance: int | None = None  # balance frozen at snapshot creation
 
+        # Hybrid Logical Clock — merges on every incoming message
+        self._hlc = HybridLogicalClock()
+
         # Transfer amounts — populated by a co-located NodeWorkload (if any).
         # The coordinator collects these via GET_WRITE_LOG for conservation.
         self._local_transfer_amounts: dict[int, int] = {}
@@ -375,6 +379,11 @@ class StorageNode:
                 if msg is None:
                     break  # connection closed
 
+                # Merge HLC on every incoming message
+                remote_ts = msg.get("logical_timestamp", 0)
+                if remote_ts:
+                    self._hlc.receive(remote_ts)
+
                 msg_type = msg.get("type", "")
                 handler = self._DISPATCH.get(msg_type)
                 if handler is None:
@@ -415,8 +424,9 @@ class StorageNode:
 
     async def _send(self, writer: asyncio.StreamWriter,
                     msg_type: MessageType, ts: int, **kwargs):
-        """Send a response message."""
-        data = encode_message(msg_type, ts, node_id=self.node_id, **kwargs)
+        """Send a response message with the node's current HLC timestamp."""
+        resp_ts = self._hlc.tick()  # advance HLC for the send event
+        data = encode_message(msg_type, resp_ts, node_id=self.node_id, **kwargs)
         writer.write(data)
         await writer.drain()
 
@@ -446,9 +456,13 @@ class StorageNode:
             role_str = msg.get("role", "NONE")
             partner = msg.get("partner", -1)
 
-            # Write to block store
+            # Write to block store using the node's HLC (already merged with
+            # the sender's timestamp on message receive). This guarantees the
+            # logged timestamp is > snapshot_ts for any write processed after
+            # SNAP_NOW, because the node merged the snapshot timestamp.
+            node_ts = self._hlc.tick()
             self.block_store.write(
-                block_id, data, ts, dep_tag,
+                block_id, data, node_ts, dep_tag,
                 _ROLE_MAP.get(role_str, "NONE"), partner,
             )
 

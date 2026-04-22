@@ -20,6 +20,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
+from ..hlc import HybridLogicalClock
 from ..logging_utils import log_event
 from ..metadata.outbox import PendingTransferOutbox, PendingTransferOutboxRow
 from ..network.connection import NodeConnection
@@ -68,7 +69,7 @@ class WorkloadGenerator:
         self._node_configs = node_configs
         self._write_rate = write_rate
         self._cross_node_ratio = cross_node_ratio
-        self._get_timestamp = get_timestamp
+        self._get_timestamp_callback = get_timestamp  # kept for compat, unused
         self._total_tokens = total_tokens
         self._block_size = block_size
         self._total_blocks = total_blocks
@@ -101,6 +102,11 @@ class WorkloadGenerator:
         self._transfer_idle.set()
         self._shutdown_timeout_s = 30.0
         self._node_backoff_until: dict[int, float] = {}
+
+        # Own HLC for causal ordering of writes.
+        # Merges on every WRITE_ACK so the next write (especially the EFFECT
+        # leg of a transfer) has a timestamp causally after the previous one.
+        self._hlc = HybridLogicalClock()
 
     @property
     def transfer_amounts(self) -> dict[int, int]:
@@ -299,7 +305,9 @@ class WorkloadGenerator:
             block_id = self._rng.randint(0, self._total_blocks - 1)
             data = os.urandom(self._block_size)
 
-            debit_ts = self._get_timestamp()
+            self._transfer_amounts[dep_tag] = amount
+
+            debit_ts = self._hlc.tick()
             await self._send_write_with_retry(
                 source,
                 block_id,
@@ -367,7 +375,7 @@ class WorkloadGenerator:
                 pending.dest,
                 pending.block_id,
                 pending.data,
-                self._get_timestamp(),
+                self._hlc.tick(),
                 dep_tag=pending.dep_tag,
                 role="EFFECT",
                 partner=pending.source,
@@ -422,7 +430,7 @@ class WorkloadGenerator:
         node_id = self._rng.choice(candidates)
         block_id = self._rng.randint(0, self._total_blocks - 1)
         data = os.urandom(self._block_size)
-        ts = self._get_timestamp()
+        ts = self._hlc.tick()
 
         await self._send_write_with_retry(
             node_id,
@@ -468,6 +476,12 @@ class WorkloadGenerator:
                 raise ConnectionError(f"Node {node_id} closed connection")
 
             if resp.get("type") == MessageType.WRITE_ACK.value:
+                # Merge HLC with the node's response timestamp.
+                # This ensures the next write's timestamp is causally after
+                # this ACK — critical for EFFECT being > CAUSE in transfers.
+                remote_ts = resp.get("logical_timestamp", 0)
+                if remote_ts:
+                    self._hlc.receive(remote_ts)
                 self._writes_per_node[node_id] += 1
                 self._writes_completed += 1
                 if dep_tag > 0 or self._writes_completed % 250 == 0:

@@ -8,6 +8,7 @@ import signal
 from demo_remote.cpp_blockstore import CppBlockStoreAdapter
 from demo_remote.sqlite_blockstore import SQLiteBlockStore
 from snapspec.logging_utils import configure_logging
+from snapspec.metadata.outbox import PendingTransferOutbox
 from snapspec.mysql.node import MySQLStorageNode
 from snapspec.node.server import StorageNode
 from snapspec.workload.node_workload import NodeWorkload
@@ -23,6 +24,24 @@ def build_block_store(block_store_type: str, node_id: int, data_dir: str, block_
         return CppBlockStoreAdapter(block_store_type, image_path, block_size, total_blocks)
 
     raise ValueError(f"Unsupported block store type: {block_store_type}")
+
+
+def build_pending_outbox(args) -> PendingTransferOutbox | None:
+    """Build optional node-local recovery outbox from CLI/env configuration."""
+    backend = args.outbox_backend.lower()
+    if backend == "none":
+        return None
+    if backend == "mysql":
+        return PendingTransferOutbox.for_mysql(
+            host=args.outbox_mysql_host,
+            port=args.outbox_mysql_port,
+            user=args.outbox_mysql_user,
+            password=args.outbox_mysql_password,
+            database=args.outbox_mysql_database,
+        )
+    if backend == "sqlite":
+        return PendingTransferOutbox.for_sqlite(args.outbox_sqlite_path)
+    raise ValueError(f"Unsupported outbox backend: {args.outbox_backend}")
 
 
 async def main():
@@ -51,6 +70,41 @@ async def main():
     parser.add_argument("--remote-nodes", default="",
                         help="Comma-separated remote nodes: id:host:port,id:host:port,...")
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument(
+        "--outbox-backend",
+        choices=["none", "sqlite", "mysql"],
+        default=os.environ.get("SNAPSPEC_NODE_OUTBOX_BACKEND", "none"),
+        help="Durable outbox backend for node-local pending transfer recovery",
+    )
+    parser.add_argument(
+        "--outbox-run-id",
+        default=os.environ.get("SNAPSPEC_OUTBOX_RUN_ID", "node-local"),
+    )
+    parser.add_argument(
+        "--outbox-sqlite-path",
+        default=os.environ.get("SNAPSPEC_NODE_OUTBOX_SQLITE_PATH", "node_pending_outbox.db"),
+    )
+    parser.add_argument(
+        "--outbox-mysql-host",
+        default=os.environ.get("SNAPSPEC_METADATA_MYSQL_HOST", "mysql_meta"),
+    )
+    parser.add_argument(
+        "--outbox-mysql-port",
+        type=int,
+        default=int(os.environ.get("SNAPSPEC_METADATA_MYSQL_PORT", "3306")),
+    )
+    parser.add_argument(
+        "--outbox-mysql-user",
+        default=os.environ.get("SNAPSPEC_METADATA_MYSQL_USER", "root"),
+    )
+    parser.add_argument(
+        "--outbox-mysql-password",
+        default=os.environ.get("SNAPSPEC_METADATA_MYSQL_PASSWORD", "snapspec"),
+    )
+    parser.add_argument(
+        "--outbox-mysql-database",
+        default=os.environ.get("SNAPSPEC_METADATA_MYSQL_DATABASE", "snapspec_metadata"),
+    )
     args = parser.parse_args()
 
     log_path = configure_logging(default_basename=f"node{args.node_id}", level=logging.INFO)
@@ -126,6 +180,8 @@ async def main():
             block_size=args.block_size,
             total_blocks=args.total_blocks,
             seed=args.seed,
+            pending_outbox=build_pending_outbox(args),
+            outbox_run_id=args.outbox_run_id,
         )
         node.set_transfer_amounts(workload._transfer_amounts)
         await workload.start()
