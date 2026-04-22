@@ -23,7 +23,8 @@ from snapspec.logging_utils import configure_logging
 from snapspec.metrics.collector import MetricsCollector
 from snapspec.network.connection import NodeConnection
 from snapspec.network.protocol import MessageType
-from snapspec.workload.generator import WorkloadGenerator
+# WorkloadGenerator removed — node-local workloads are the standard.
+# The coordinator only coordinates snapshots; workloads run on nodes.
 
 logger = logging.getLogger(__name__)
 
@@ -156,35 +157,11 @@ async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> tu
     )
     await coordinator.start()
 
-    node_local_workload = cfg.get("node_local_workload", False)
-
-    workload = None
-    if not node_local_workload:
-        # Legacy mode: coordinator runs the workload (centralized)
-        workload = WorkloadGenerator(
-            node_configs=node_configs,
-            write_rate=cfg["write_rate"],
-            cross_node_ratio=cfg["cross_node_ratio"],
-            get_timestamp=coordinator.tick,
-            total_tokens=total_tokens,
-            block_size=cfg.get("block_size", 4096),
-            total_blocks=cfg.get("total_blocks", 256),
-            seed=cfg.get("seed", 42),
-            effect_delay_s=cfg.get("effect_delay_s", 0.0),
-        )
-        await workload.start()
-        coordinator.set_workload(workload)
-        coordinator.transfer_amounts = workload._transfer_amounts
-        coordinator.attach_status_sources(workload, metrics)
-        await metrics.start_continuous_sampling(workload)
-    else:
-        # Node-local mode: workloads run on the nodes themselves.
-        # Coordinator only does snapshot coordination.
-        # transfer_amounts collected from nodes via GET_WRITE_LOG.
-        coordinator.transfer_amounts = {}
-        logger.info("Node-local workload mode — coordinator only coordinates snapshots")
-
+    # Node-local workloads: nodes generate their own writes.
+    # Coordinator only does snapshot coordination.
+    # transfer_amounts collected from nodes via GET_WRITE_LOG.
     coordinator.expected_total = total_tokens
+    coordinator.transfer_amounts = {}
 
     coordinator._running = True
     snap_task = asyncio.create_task(coordinator._snapshot_loop(cfg["duration_s"]))
@@ -193,9 +170,6 @@ async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> tu
     except asyncio.CancelledError:
         pass
 
-    if workload:
-        await workload.stop()
-        await metrics.stop_continuous_sampling()
     await coordinator.stop()
 
     summary = metrics.compute_summary()

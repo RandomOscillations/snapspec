@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from snapspec.node.server import StorageNode, MockBlockStore
 from snapspec.coordinator.coordinator import Coordinator
-from snapspec.workload.generator import WorkloadGenerator
+from snapspec.workload.node_workload import NodeWorkload
 from snapspec.metrics.collector import MetricsCollector
 
 logging.basicConfig(level=logging.WARNING)
@@ -90,22 +90,30 @@ async def run_one(strategy_name: str, cfg: dict) -> dict:
     )
     await coordinator.start()
 
-    workload = WorkloadGenerator(
-        node_configs=node_configs,
-        write_rate=cfg["write_rate"],
-        cross_node_ratio=cfg["cross_node_ratio"],
-        get_timestamp=coordinator.tick,
-        total_tokens=total_tokens,
-        block_size=cfg["block_size"],
-        total_blocks=cfg["total_blocks"],
-        seed=cfg["seed"],
-    )
-    await workload.start()
+    # Create one workload per node
+    workloads = []
+    num_nodes = len(node_configs)
+    for i, ncfg in enumerate(node_configs):
+        remote = [c for c in node_configs if c["node_id"] != ncfg["node_id"]]
+        wl = NodeWorkload(
+            node_id=ncfg["node_id"],
+            local_port=ncfg["port"],
+            remote_nodes=remote,
+            write_rate=cfg["write_rate"],
+            cross_node_ratio=cfg["cross_node_ratio"],
+            initial_balance=total_tokens // num_nodes,
+            total_tokens=total_tokens,
+            num_nodes=num_nodes,
+            block_size=cfg["block_size"],
+            total_blocks=cfg["total_blocks"],
+            seed=cfg["seed"],
+        )
+        workloads.append(wl)
+    for wl in workloads:
+        await wl.start()
 
     coordinator.expected_total = total_tokens
-    coordinator.transfer_amounts = workload._transfer_amounts
-
-    await metrics.start_continuous_sampling(workload)
+    coordinator.transfer_amounts = {}
 
     coordinator._running = True
     snap_task = asyncio.create_task(
@@ -116,8 +124,8 @@ async def run_one(strategy_name: str, cfg: dict) -> dict:
     except asyncio.CancelledError:
         pass
 
-    await workload.stop()
-    await metrics.stop_continuous_sampling()
+    for wl in workloads:
+        await wl.stop()
     await coordinator.stop()
     for n in nodes:
         await n.stop()

@@ -1,7 +1,7 @@
 """
 End-to-end integration tests.
 
-Wires together real StorageNodes, Coordinator, WorkloadGenerator, and
+Wires together real StorageNodes, Coordinator, NodeWorkload, and
 MetricsCollector. Validates that the full pipeline works for at least
 pause-and-snap and speculative strategies.
 """
@@ -16,7 +16,7 @@ from snapspec.node.server import StorageNode, MockBlockStore
 from snapspec.coordinator.coordinator import Coordinator
 from snapspec.coordinator.pause_and_snap import execute as pause_and_snap_execute
 from snapspec.coordinator.speculative import execute as speculative_execute
-from snapspec.workload.generator import WorkloadGenerator
+from snapspec.workload.node_workload import NodeWorkload
 from snapspec.metrics.collector import MetricsCollector
 
 
@@ -52,6 +52,31 @@ async def cluster(tmp_path):
         await n.stop()
 
 
+def _start_workloads(nodes, cross_node_ratio=0.2, write_rate=100):
+    """Create a NodeWorkload for each node (not started yet)."""
+    workloads = []
+    for node in nodes:
+        remote = [
+            {"node_id": n.node_id, "host": "127.0.0.1", "port": n.actual_port}
+            for n in nodes if n.node_id != node.node_id
+        ]
+        wl = NodeWorkload(
+            node_id=node.node_id,
+            local_port=node.actual_port,
+            remote_nodes=remote,
+            write_rate=write_rate,
+            cross_node_ratio=cross_node_ratio,
+            initial_balance=TOTAL_TOKENS // NUM_NODES,
+            total_tokens=TOTAL_TOKENS,
+            num_nodes=NUM_NODES,
+            block_size=BLOCK_SIZE,
+            total_blocks=TOTAL_BLOCKS,
+        )
+        node.set_transfer_amounts(wl._transfer_amounts)
+        workloads.append(wl)
+    return workloads
+
+
 class TestFullRunPauseAndSnap:
     @pytest.mark.asyncio
     async def test_snapshots_and_writes(self, cluster):
@@ -71,21 +96,15 @@ class TestFullRunPauseAndSnap:
             health_check_interval_s=9999,
             status_interval_s=9999,
         )
+        coordinator.expected_total = TOTAL_TOKENS
+        coordinator.transfer_amounts = {}
         await coordinator.start()
 
-        workload = WorkloadGenerator(
-            node_configs=node_configs,
-            write_rate=100,
-            cross_node_ratio=0.2,
-            get_timestamp=coordinator.tick,
-            total_tokens=TOTAL_TOKENS,
-            block_size=BLOCK_SIZE,
-            total_blocks=TOTAL_BLOCKS,
-            seed=42,
-        )
-        await workload.start()
+        workloads = _start_workloads(nodes, cross_node_ratio=0.2, write_rate=100)
+        for wl in workloads:
+            await wl.start()
 
-        # Run for a short duration with snapshot loop
+        # Run snapshot loop
         coordinator._running = True
         snap_task = asyncio.create_task(coordinator._snapshot_loop(1.5))
         try:
@@ -93,11 +112,13 @@ class TestFullRunPauseAndSnap:
         except asyncio.CancelledError:
             pass
 
-        await workload.stop()
+        for wl in workloads:
+            await wl.stop()
         await coordinator.stop()
 
-        # Verify writes happened
-        assert workload.writes_completed > 0
+        # Verify writes happened across all nodes
+        total_writes = sum(wl.writes_completed for wl in workloads)
+        assert total_writes > 0
 
         # Verify snapshots were taken and recorded
         summary = metrics.compute_summary()
@@ -130,19 +151,13 @@ class TestFullRunSpeculative:
             health_check_interval_s=9999,
             status_interval_s=9999,
         )
+        coordinator.expected_total = TOTAL_TOKENS
+        coordinator.transfer_amounts = {}
         await coordinator.start()
 
-        workload = WorkloadGenerator(
-            node_configs=node_configs,
-            write_rate=50,
-            cross_node_ratio=0.1,
-            get_timestamp=coordinator.tick,
-            total_tokens=TOTAL_TOKENS,
-            block_size=BLOCK_SIZE,
-            total_blocks=TOTAL_BLOCKS,
-            seed=99,
-        )
-        await workload.start()
+        workloads = _start_workloads(nodes, cross_node_ratio=0.1, write_rate=50)
+        for wl in workloads:
+            await wl.start()
 
         coordinator._running = True
         snap_task = asyncio.create_task(coordinator._snapshot_loop(1.5))
@@ -151,35 +166,32 @@ class TestFullRunSpeculative:
         except asyncio.CancelledError:
             pass
 
-        await workload.stop()
+        for wl in workloads:
+            await wl.stop()
         await coordinator.stop()
 
-        assert workload.writes_completed > 0
+        total_writes = sum(wl.writes_completed for wl in workloads)
+        assert total_writes > 0
 
         summary = metrics.compute_summary()
-        # Speculative may retry, so check total count rather than success
         assert summary["snapshot_count"] > 0
 
 
 class TestTokenConservation:
     @pytest.mark.asyncio
     async def test_balances_sum_preserved(self, cluster):
-        """Verify the workload generator's local balance tracking sums to total_tokens."""
+        """Verify that node balances always sum to total_tokens after workload."""
         nodes, node_configs = cluster
 
-        workload = WorkloadGenerator(
-            node_configs=node_configs,
-            write_rate=200,
-            cross_node_ratio=0.5,
-            get_timestamp=lambda: 0,  # dummy clock for this test
-            total_tokens=TOTAL_TOKENS,
-            block_size=BLOCK_SIZE,
-            total_blocks=TOTAL_BLOCKS,
-            seed=7,
-        )
-        await workload.start()
+        workloads = _start_workloads(nodes, cross_node_ratio=0.5, write_rate=200)
+        for wl in workloads:
+            await wl.start()
         await asyncio.sleep(0.3)
-        await workload.stop()
+        for wl in workloads:
+            await wl.stop()
 
-        # Internal balance tracking should always sum to total_tokens
-        assert sum(workload._balances.values()) == TOTAL_TOKENS
+        # Node balances should sum to total_tokens
+        total_balance = sum(n._balance for n in nodes)
+        assert total_balance == TOTAL_TOKENS, (
+            f"Conservation violated: {total_balance} != {TOTAL_TOKENS}"
+        )

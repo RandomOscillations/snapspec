@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..coordinator.strategy_interface import SnapshotResult
-    from ..workload.generator import WorkloadGenerator
+    from ..workload.node_workload import NodeWorkload
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +164,7 @@ class MetricsCollector:
 
     async def start_continuous_sampling(
         self,
-        workload: WorkloadGenerator,
+        workload: NodeWorkload,
         interval_s: float = 1.0,
     ):
         """Start background throughput + CPU sampling."""
@@ -184,7 +184,7 @@ class MetricsCollector:
                 pass
 
     async def _sampling_loop(
-        self, workload: WorkloadGenerator, interval_s: float
+        self, workload: NodeWorkload, interval_s: float
     ):
         """Sample throughput and CPU at regular intervals."""
         prev_writes = workload.writes_completed

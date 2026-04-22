@@ -24,7 +24,7 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from snapspec.coordinator.coordinator import Coordinator
 from snapspec.logging_utils import configure_logging
-from snapspec.workload.generator import WorkloadGenerator
+from snapspec.workload.node_workload import NodeWorkload
 from snapspec.metrics.collector import MetricsCollector
 
 logger = logging.getLogger(__name__)
@@ -255,25 +255,30 @@ async def run_single(config: dict, rep: int, output_dir: str) -> str:
         coordinator.expected_total = total_tokens
         await coordinator.start()
 
-        # 4. Create workload generator (shares coordinator's clock)
-        workload = WorkloadGenerator(
-            node_configs=node_configs,
-            write_rate=config.get("write_rate", 100.0),
-            cross_node_ratio=config.get("cross_node_ratio", 0.1),
-            get_timestamp=coordinator.tick,
-            total_tokens=total_tokens,
-            block_size=config.get("block_size", 4096),
-            total_blocks=config.get("total_blocks", 256),
-            seed=config.get("seed"),
-            effect_delay_s=config.get("effect_delay_s", 0.0),
-        )
-        await workload.start()
-        coordinator.set_workload(workload)
-        coordinator.transfer_amounts = workload._transfer_amounts
-        coordinator.attach_status_sources(workload, metrics)
+        # 4. Create node-local workloads (one per node)
+        workloads = []
+        for i, ncfg in enumerate(node_configs):
+            remote = [c for c in node_configs if c["node_id"] != ncfg["node_id"]]
+            wl = NodeWorkload(
+                node_id=ncfg["node_id"],
+                local_port=ncfg["port"],
+                remote_nodes=remote,
+                write_rate=config.get("write_rate", 100.0),
+                cross_node_ratio=config.get("cross_node_ratio", 0.1),
+                initial_balance=total_tokens // num_nodes + (1 if i == 0 and total_tokens % num_nodes else 0),
+                total_tokens=total_tokens,
+                num_nodes=num_nodes,
+                block_size=config.get("block_size", 4096),
+                total_blocks=config.get("total_blocks", 256),
+                seed=config.get("seed"),
+            )
+            workloads.append(wl)
 
-        # 5. Start continuous sampling
-        await metrics.start_continuous_sampling(workload)
+        for wl in workloads:
+            await wl.start()
+
+        coordinator.transfer_amounts = {}
+        # 5. No continuous sampling needed — workloads are separate
 
         # 6. Run snapshot loop for duration
         duration_s = config.get("duration_s", 60.0)
@@ -292,8 +297,8 @@ async def run_single(config: dict, rep: int, output_dir: str) -> str:
             pass
 
         # 7. Teardown (order matters)
-        await workload.stop()
-        await metrics.stop_continuous_sampling()
+        for wl in workloads:
+            await wl.stop()
         await coordinator.stop()
 
     finally:

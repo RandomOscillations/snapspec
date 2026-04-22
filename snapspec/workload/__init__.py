@@ -1,3 +1,3 @@
-from .generator import WorkloadGenerator
+from .node_workload import NodeWorkload
 
-__all__ = ["WorkloadGenerator"]
+__all__ = ["NodeWorkload"]
