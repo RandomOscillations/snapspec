@@ -177,19 +177,24 @@ TEST_F(ROWBlockStoreTest, WriteLogEntries) {
     store.create_snapshot(100);
 
     auto data = make_block(42);
-    // Writes with timestamp <= snapshot_ts are part of the snapshot and should not be logged.
+    // ALL writes during active snapshot go to the delta and are logged,
+    // regardless of their logical timestamp.  Under network delay the
+    // timestamp may be <= snapshot_ts even though the write arrived after
+    // snapshot creation.
     store.write(10, data.data(), 50, 1001, snapspec::WriteLogEntry::Role::CAUSE, 2);
     store.write(20, data.data(), 75, 1001, snapspec::WriteLogEntry::Role::EFFECT, 1);
-
-    // Writes with timestamp > snapshot_ts happened after the snapshot and should be logged.
     store.write(30, data.data(), 200, 1002, snapspec::WriteLogEntry::Role::CAUSE, 3);
     store.write(40, data.data(), 225, 1002, snapspec::WriteLogEntry::Role::EFFECT, 4);
 
     auto log = store.get_write_log();
-    EXPECT_EQ(log.size(), 2u);
-    EXPECT_EQ(log[0].dependency_tag, 1002u);
+    EXPECT_EQ(log.size(), 4u);
+    EXPECT_EQ(log[0].dependency_tag, 1001u);
     EXPECT_EQ(log[0].role, snapspec::WriteLogEntry::Role::CAUSE);
+    EXPECT_EQ(log[1].dependency_tag, 1001u);
     EXPECT_EQ(log[1].role, snapspec::WriteLogEntry::Role::EFFECT);
+    EXPECT_EQ(log[2].dependency_tag, 1002u);
+    EXPECT_EQ(log[2].role, snapspec::WriteLogEntry::Role::CAUSE);
+    EXPECT_EQ(log[3].role, snapspec::WriteLogEntry::Role::EFFECT);
 
     store.discard_snapshot();
 }

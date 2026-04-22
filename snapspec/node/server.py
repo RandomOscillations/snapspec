@@ -75,14 +75,15 @@ class MockBlockStore:
         self._blocks[block_id] = data
         if self._snapshot_active:
             self._delta_count += 1
-            if timestamp > self._snapshot_ts:
-                self._write_log.append(_MockWriteLogEntry(
-                    block_id=block_id,
-                    timestamp=timestamp,
-                    dependency_tag=dep_tag,
-                    role=role,
-                    partner_node_id=partner,
-                ))
+            # Log ALL writes during active snapshot — they are NOT in the
+            # snapshot (snapshot was frozen at create_snapshot time).
+            self._write_log.append(_MockWriteLogEntry(
+                block_id=block_id,
+                timestamp=timestamp,
+                dependency_tag=dep_tag,
+                role=role,
+                partner_node_id=partner,
+            ))
 
     def create_snapshot(self, snapshot_ts: int):
         assert not self._snapshot_active, "Cannot create snapshot: one is already active"
@@ -203,6 +204,10 @@ class StorageNode:
         self._balance = initial_balance
         self._snapshot_balance: int | None = None  # balance frozen at snapshot creation
 
+        # Transfer amounts — populated by a co-located NodeWorkload (if any).
+        # The coordinator collects these via GET_WRITE_LOG for conservation.
+        self._local_transfer_amounts: dict[int, int] = {}
+
         # Serializes write/snapshot operations (FM1: race prevention)
         self._state_lock = asyncio.Lock()
 
@@ -219,6 +224,14 @@ class StorageNode:
         self._connections: list[asyncio.StreamWriter] = []
         self._stopping = False
         self._component = f"node-{self.node_id}"
+
+    def set_transfer_amounts(self, amounts: dict[int, int]) -> None:
+        """Register a live reference to a NodeWorkload's transfer_amounts dict.
+
+        The coordinator collects these via GET_WRITE_LOG for conservation
+        validation. Call this after creating a co-located NodeWorkload.
+        """
+        self._local_transfer_amounts = amounts
 
     @property
     def actual_port(self) -> int:
@@ -670,7 +683,8 @@ class StorageNode:
         balance = self._snapshot_balance if self._snapshot_balance is not None else self._balance
         await self._send(writer, MessageType.WRITE_LOG, ts,
                          entries=entries, balance=balance,
-                         snapshot_balance=balance)
+                         snapshot_balance=balance,
+                         transfer_amounts=self._local_transfer_amounts)
 
     async def _handle_reset(self, msg: dict, writer: asyncio.StreamWriter):
         """Reset node to initial state — used between strategy runs."""

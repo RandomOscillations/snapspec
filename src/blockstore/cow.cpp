@@ -81,10 +81,9 @@ void COWBlockStore::write(uint64_t block_id, const uint8_t* data,
         active_file_.write(reinterpret_cast<const char*>(data), block_size_);
         active_file_.flush();
 
-        // Log writes that occurred after the snapshot boundary.
-        if (timestamp > snapshot_ts_) {
-            write_log_.push_back({block_id, timestamp, dep_tag, role, partner});
-        }
+        // Log ALL writes during active snapshot — they go to delta/COW area,
+        // not the snapshot.
+        write_log_.push_back({block_id, timestamp, dep_tag, role, partner});
     } else {
         // No snapshot — write directly to active
         active_file_.seekp(static_cast<std::streamoff>(block_id * block_size_));

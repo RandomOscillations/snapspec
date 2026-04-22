@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import json
 import logging
 import os
 import signal
@@ -9,6 +10,7 @@ from demo_remote.sqlite_blockstore import SQLiteBlockStore
 from snapspec.logging_utils import configure_logging
 from snapspec.mysql.node import MySQLStorageNode
 from snapspec.node.server import StorageNode
+from snapspec.workload.node_workload import NodeWorkload
 
 
 def build_block_store(block_store_type: str, node_id: int, data_dir: str, block_size: int, total_blocks: int):
@@ -39,6 +41,16 @@ async def main():
     parser.add_argument("--mysql-user", default="root")
     parser.add_argument("--mysql-password", default="snapspec")
     parser.add_argument("--mysql-database")
+    # Workload options — if --workload is set, run a NodeWorkload alongside the node
+    parser.add_argument("--workload", action="store_true",
+                        help="Run a co-located workload generator on this node")
+    parser.add_argument("--write-rate", type=float, default=200.0)
+    parser.add_argument("--cross-node-ratio", type=float, default=0.2)
+    parser.add_argument("--total-tokens", type=int, default=100000)
+    parser.add_argument("--num-nodes", type=int, default=3)
+    parser.add_argument("--remote-nodes", default="",
+                        help="Comma-separated remote nodes: id:host:port,id:host:port,...")
+    parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args()
 
     log_path = configure_logging(default_basename=f"node{args.node_id}", level=logging.INFO)
@@ -82,10 +94,46 @@ async def main():
         )
 
     await node.start()
+    actual_port = node.actual_port
     print(
-        f"Node {args.node_id} running on {args.host}:{args.port} "
+        f"Node {args.node_id} running on {args.host}:{actual_port} "
         f"(block_store={args.block_store})"
     )
+
+    # Optionally start a co-located workload
+    workload = None
+    if args.workload:
+        remote_nodes = []
+        if args.remote_nodes:
+            for part in args.remote_nodes.split(","):
+                nid, host, port = part.strip().split(":")
+                if int(nid) != args.node_id:
+                    remote_nodes.append({
+                        "node_id": int(nid),
+                        "host": host,
+                        "port": int(port),
+                    })
+
+        workload = NodeWorkload(
+            node_id=args.node_id,
+            local_port=actual_port,
+            remote_nodes=remote_nodes,
+            write_rate=args.write_rate,
+            cross_node_ratio=args.cross_node_ratio,
+            initial_balance=args.initial_balance,
+            total_tokens=args.total_tokens,
+            num_nodes=args.num_nodes,
+            block_size=args.block_size,
+            total_blocks=args.total_blocks,
+            seed=args.seed,
+        )
+        node.set_transfer_amounts(workload._transfer_amounts)
+        await workload.start()
+        node_logger.info(
+            "NodeWorkload[%d] started: rate=%.0f, ratio=%.2f, remotes=%s",
+            args.node_id, args.write_rate, args.cross_node_ratio,
+            [r["node_id"] for r in remote_nodes],
+        )
 
     stop_event = asyncio.Event()
 
@@ -102,6 +150,8 @@ async def main():
     try:
         await stop_event.wait()
     finally:
+        if workload:
+            await workload.stop()
         await node.stop()
 
 

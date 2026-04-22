@@ -78,10 +78,10 @@ void ROWBlockStore::write(uint64_t block_id, const uint8_t* data,
             modified_blocks_.push_back(block_id);
         }
 
-        // Log writes that occurred after the snapshot boundary.
-        if (timestamp > snapshot_ts_) {
-            write_log_.push_back({block_id, timestamp, dep_tag, role, partner});
-        }
+        // Log ALL writes during active snapshot — they go to delta, not the
+        // snapshot.  Under network delay the logical timestamp may be <= snapshot_ts
+        // even though the write arrived after snapshot creation.
+        write_log_.push_back({block_id, timestamp, dep_tag, role, partner});
     } else {
         // No snapshot — write directly to base
         base_file_.seekp(static_cast<std::streamoff>(block_id * block_size_));

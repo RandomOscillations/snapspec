@@ -743,17 +743,42 @@ async def run_all(host: str, password: str) -> None:
     sys.exit(0 if passed == total else 1)
 
 
+async def run_one(tc_num: int, host: str, password: str) -> None:
+    mysql_cfgs = _mysql_cfg(host, password)
+    test_fns = [
+        tc1_no_contention,
+        tc2_causal_violation,
+        tc3_conservation,
+        tc4_mvcc_isolation,
+        tc5_speculative_degrades,
+    ]
+    if tc_num < 1 or tc_num > len(test_fns):
+        print(f"Invalid TC number: {tc_num} (must be 1-{len(test_fns)})")
+        sys.exit(1)
+
+    fn = test_fns[tc_num - 1]
+    print(f"Running {fn.__name__} …", flush=True)
+    result = await fn(mysql_cfgs)
+    result.print()
+    sys.exit(0 if result.passed else 1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="SnapSpec 5 test cases")
     parser.add_argument("--host",     default="127.0.0.1")
     parser.add_argument("--password", default="snapspec")
+    parser.add_argument("--tc", type=int, default=0,
+                        help="Run a single test case (1-5). Default: run all.")
     args = parser.parse_args()
 
     import logging
     logging.basicConfig(level=logging.WARNING,
                         format="%(asctime)s %(levelname)s %(message)s")
 
-    asyncio.run(run_all(args.host, args.password))
+    if args.tc > 0:
+        asyncio.run(run_one(args.tc, args.host, args.password))
+    else:
+        asyncio.run(run_all(args.host, args.password))
 
 
 if __name__ == "__main__":

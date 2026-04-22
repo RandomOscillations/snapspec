@@ -1,0 +1,166 @@
+# Extended compose for node scaling experiments (up to 7 nodes).
+# Overlay on top of docker-compose.yml: docker compose -f docker-compose.yml -f docker-compose.scale.yml up
+services:
+  node3:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: snapspec-node3
+    hostname: node3
+    command:
+      - python
+      - -m
+      - demo_remote.run_remote_node
+      - --node-id
+      - "3"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "9000"
+      - --block-store
+      - ${SNAPSPEC_BLOCK_STORE:-row}
+      - --block-size
+      - ${SNAPSPEC_BLOCK_SIZE:-4096}
+      - --total-blocks
+      - ${SNAPSPEC_TOTAL_BLOCKS:-256}
+      - --data-dir
+      - /var/snapspec/data
+      - --archive-dir
+      - /var/snapspec/archives
+      - --initial-balance
+      - ${SNAPSPEC_BALANCE_PER_NODE:-14286}
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./state/node3/data:/var/snapspec/data
+      - ./state/node3/archives:/var/snapspec/archives
+      - ./logs:/var/snapspec/logs
+    environment:
+      SNAPSPEC_LOG_DIR: /var/snapspec/logs
+      SNAPSPEC_LOG_PATH: /var/snapspec/logs/node3.log
+    networks:
+      snapnet:
+        ipv4_address: 10.10.0.13
+
+  node4:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: snapspec-node4
+    hostname: node4
+    command:
+      - python
+      - -m
+      - demo_remote.run_remote_node
+      - --node-id
+      - "4"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "9000"
+      - --block-store
+      - ${SNAPSPEC_BLOCK_STORE:-row}
+      - --block-size
+      - ${SNAPSPEC_BLOCK_SIZE:-4096}
+      - --total-blocks
+      - ${SNAPSPEC_TOTAL_BLOCKS:-256}
+      - --data-dir
+      - /var/snapspec/data
+      - --archive-dir
+      - /var/snapspec/archives
+      - --initial-balance
+      - ${SNAPSPEC_BALANCE_PER_NODE:-14286}
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./state/node4/data:/var/snapspec/data
+      - ./state/node4/archives:/var/snapspec/archives
+      - ./logs:/var/snapspec/logs
+    environment:
+      SNAPSPEC_LOG_DIR: /var/snapspec/logs
+      SNAPSPEC_LOG_PATH: /var/snapspec/logs/node4.log
+    networks:
+      snapnet:
+        ipv4_address: 10.10.0.14
+
+  node5:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: snapspec-node5
+    hostname: node5
+    command:
+      - python
+      - -m
+      - demo_remote.run_remote_node
+      - --node-id
+      - "5"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "9000"
+      - --block-store
+      - ${SNAPSPEC_BLOCK_STORE:-row}
+      - --block-size
+      - ${SNAPSPEC_BLOCK_SIZE:-4096}
+      - --total-blocks
+      - ${SNAPSPEC_TOTAL_BLOCKS:-256}
+      - --data-dir
+      - /var/snapspec/data
+      - --archive-dir
+      - /var/snapspec/archives
+      - --initial-balance
+      - ${SNAPSPEC_BALANCE_PER_NODE:-14286}
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./state/node5/data:/var/snapspec/data
+      - ./state/node5/archives:/var/snapspec/archives
+      - ./logs:/var/snapspec/logs
+    environment:
+      SNAPSPEC_LOG_DIR: /var/snapspec/logs
+      SNAPSPEC_LOG_PATH: /var/snapspec/logs/node5.log
+    networks:
+      snapnet:
+        ipv4_address: 10.10.0.15
+
+  node6:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: snapspec-node6
+    hostname: node6
+    command:
+      - python
+      - -m
+      - demo_remote.run_remote_node
+      - --node-id
+      - "6"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "9000"
+      - --block-store
+      - ${SNAPSPEC_BLOCK_STORE:-row}
+      - --block-size
+      - ${SNAPSPEC_BLOCK_SIZE:-4096}
+      - --total-blocks
+      - ${SNAPSPEC_TOTAL_BLOCKS:-256}
+      - --data-dir
+      - /var/snapspec/data
+      - --archive-dir
+      - /var/snapspec/archives
+      - --initial-balance
+      - ${SNAPSPEC_BALANCE_PER_NODE:-14286}
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./state/node6/data:/var/snapspec/data
+      - ./state/node6/archives:/var/snapspec/archives
+      - ./logs:/var/snapspec/logs
+    environment:
+      SNAPSPEC_LOG_DIR: /var/snapspec/logs
+      SNAPSPEC_LOG_PATH: /var/snapspec/logs/node6.log
+    networks:
+      snapnet:
+        ipv4_address: 10.10.0.16
