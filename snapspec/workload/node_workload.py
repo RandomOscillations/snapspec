@@ -57,6 +57,7 @@ class NodeWorkload:
         remote_nodes: list[dict],
         write_rate: float = 200.0,
         cross_node_ratio: float = 0.2,
+        initial_balance: int | None = None,
         total_tokens: int = 100_000,
         num_nodes: int = 3,
         block_size: int = 4096,
@@ -84,8 +85,7 @@ class NodeWorkload:
         self._remote_conns: dict[int, NodeConnection] = {}
 
         # Balance tracking (this node's local view)
-        per_node = total_tokens // num_nodes
-        self._local_balance: int = per_node
+        self._local_balance: int = initial_balance if initial_balance is not None else (total_tokens // num_nodes)
 
         # Transfer tracking for conservation validation
         self._transfer_amounts: dict[int, int] = {}

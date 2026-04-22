@@ -156,25 +156,35 @@ async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> tu
     )
     await coordinator.start()
 
-    workload = WorkloadGenerator(
-        node_configs=node_configs,
-        write_rate=cfg["write_rate"],
-        cross_node_ratio=cfg["cross_node_ratio"],
-        get_timestamp=coordinator.tick,
-        total_tokens=total_tokens,
-        block_size=cfg.get("block_size", 4096),
-        total_blocks=cfg.get("total_blocks", 256),
-        seed=cfg.get("seed", 42),
-        effect_delay_s=cfg.get("effect_delay_s", 0.0),
-    )
-    await workload.start()
+    node_local_workload = cfg.get("node_local_workload", False)
 
-    coordinator.set_workload(workload)
+    workload = None
+    if not node_local_workload:
+        # Legacy mode: coordinator runs the workload (centralized)
+        workload = WorkloadGenerator(
+            node_configs=node_configs,
+            write_rate=cfg["write_rate"],
+            cross_node_ratio=cfg["cross_node_ratio"],
+            get_timestamp=coordinator.tick,
+            total_tokens=total_tokens,
+            block_size=cfg.get("block_size", 4096),
+            total_blocks=cfg.get("total_blocks", 256),
+            seed=cfg.get("seed", 42),
+            effect_delay_s=cfg.get("effect_delay_s", 0.0),
+        )
+        await workload.start()
+        coordinator.set_workload(workload)
+        coordinator.transfer_amounts = workload._transfer_amounts
+        coordinator.attach_status_sources(workload, metrics)
+        await metrics.start_continuous_sampling(workload)
+    else:
+        # Node-local mode: workloads run on the nodes themselves.
+        # Coordinator only does snapshot coordination.
+        # transfer_amounts collected from nodes via GET_WRITE_LOG.
+        coordinator.transfer_amounts = {}
+        logger.info("Node-local workload mode — coordinator only coordinates snapshots")
+
     coordinator.expected_total = total_tokens
-    coordinator.transfer_amounts = workload._transfer_amounts
-    coordinator.attach_status_sources(workload, metrics)
-
-    await metrics.start_continuous_sampling(workload)
 
     coordinator._running = True
     snap_task = asyncio.create_task(coordinator._snapshot_loop(cfg["duration_s"]))
@@ -183,8 +193,9 @@ async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> tu
     except asyncio.CancelledError:
         pass
 
-    await workload.stop()
-    await metrics.stop_continuous_sampling()
+    if workload:
+        await workload.stop()
+        await metrics.stop_continuous_sampling()
     await coordinator.stop()
 
     summary = metrics.compute_summary()
@@ -277,6 +288,7 @@ async def main():
             if "SNAPSPEC_MIN_SNAPSHOT_NODES" in os.environ else None
         ),
         "shutdown_timeout_s": float(os.environ.get("SNAPSPEC_SHUTDOWN_TIMEOUT_S", "30.0")),
+        "node_local_workload": os.environ.get("SNAPSPEC_NODE_LOCAL_WORKLOAD", "").lower() in ("1", "true", "yes"),
         "shutdown_nodes_on_stop": (
             os.environ.get("SNAPSPEC_SHUTDOWN_NODES_ON_STOP", "false").lower() == "true"
         ),

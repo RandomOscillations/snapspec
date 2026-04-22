@@ -1,0 +1,114 @@
+# Node-local workload variant: each node runs its own workload.
+# Coordinator only does snapshot coordination (no workload generation).
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.nodelocal.yml up -d
+#
+# Override workload params via env vars:
+#   SNAPSPEC_WRITE_RATE=200 SNAPSPEC_CROSS_NODE_RATIO=0.3 docker compose ...
+
+services:
+  node0:
+    command:
+      - python
+      - -m
+      - demo_remote.run_remote_node
+      - --node-id
+      - "0"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "9000"
+      - --block-store
+      - ${SNAPSPEC_BLOCK_STORE:-row}
+      - --block-size
+      - ${SNAPSPEC_BLOCK_SIZE:-4096}
+      - --total-blocks
+      - ${SNAPSPEC_TOTAL_BLOCKS:-256}
+      - --data-dir
+      - /var/snapspec/data
+      - --archive-dir
+      - /var/snapspec/archives
+      - --initial-balance
+      - "33334"
+      - --workload
+      - --write-rate
+      - ${SNAPSPEC_WRITE_RATE:-200}
+      - --cross-node-ratio
+      - ${SNAPSPEC_CROSS_NODE_RATIO:-0.2}
+      - --total-tokens
+      - ${SNAPSPEC_TOTAL_TOKENS:-100000}
+      - --num-nodes
+      - "3"
+      - --remote-nodes
+      - "1:node1:9000,2:node2:9000"
+
+  node1:
+    command:
+      - python
+      - -m
+      - demo_remote.run_remote_node
+      - --node-id
+      - "1"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "9000"
+      - --block-store
+      - ${SNAPSPEC_BLOCK_STORE:-row}
+      - --block-size
+      - ${SNAPSPEC_BLOCK_SIZE:-4096}
+      - --total-blocks
+      - ${SNAPSPEC_TOTAL_BLOCKS:-256}
+      - --data-dir
+      - /var/snapspec/data
+      - --archive-dir
+      - /var/snapspec/archives
+      - --initial-balance
+      - "33333"
+      - --workload
+      - --write-rate
+      - ${SNAPSPEC_WRITE_RATE:-200}
+      - --cross-node-ratio
+      - ${SNAPSPEC_CROSS_NODE_RATIO:-0.2}
+      - --total-tokens
+      - ${SNAPSPEC_TOTAL_TOKENS:-100000}
+      - --num-nodes
+      - "3"
+      - --remote-nodes
+      - "0:node0:9000,2:node2:9000"
+
+  node2:
+    command:
+      - python
+      - -m
+      - demo_remote.run_remote_node
+      - --node-id
+      - "2"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "9000"
+      - --block-store
+      - ${SNAPSPEC_BLOCK_STORE:-row}
+      - --block-size
+      - ${SNAPSPEC_BLOCK_SIZE:-4096}
+      - --total-blocks
+      - ${SNAPSPEC_TOTAL_BLOCKS:-256}
+      - --data-dir
+      - /var/snapspec/data
+      - --archive-dir
+      - /var/snapspec/archives
+      - --initial-balance
+      - "33333"
+      - --workload
+      - --write-rate
+      - ${SNAPSPEC_WRITE_RATE:-200}
+      - --cross-node-ratio
+      - ${SNAPSPEC_CROSS_NODE_RATIO:-0.2}
+      - --total-tokens
+      - ${SNAPSPEC_TOTAL_TOKENS:-100000}
+      - --num-nodes
+      - "3"
+      - --remote-nodes
+      - "0:node0:9000,1:node1:9000"
