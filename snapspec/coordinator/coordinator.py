@@ -20,6 +20,7 @@ import time
 from typing import Any, Callable
 
 from ..logging_utils import log_event
+from ..metadata.registry import SnapshotMetadataRegistry, SnapshotMetadataRow
 from ..network.protocol import MessageType
 from ..network.connection import NodeConnection
 from .strategy_interface import SnapshotResult
@@ -61,6 +62,7 @@ class Coordinator:
         delta_size_threshold_frac: float = 0.1,
         total_blocks_per_node: int = 4096,
         on_snapshot_complete: Callable | None = None,
+        metadata_registry: SnapshotMetadataRegistry | None = None,
     ):
         self._node_configs = node_configs
         self.strategy_fn = strategy_fn
@@ -82,6 +84,7 @@ class Coordinator:
         self.total_blocks_per_node = total_blocks_per_node
 
         self._on_snapshot_complete = on_snapshot_complete
+        self._metadata_registry = metadata_registry
 
         # Accuracy validation — set by experiment harness after workload starts
         self.expected_total: int = 0           # 0 disables conservation check
@@ -338,6 +341,8 @@ class Coordinator:
 
         # Verify connectivity
         await self._verify_connectivity()
+        if self._metadata_registry is not None:
+            await self._metadata_registry.start()
         self._health_task = asyncio.create_task(self._health_check_loop())
         if self.status_interval_s > 0:
             self._status_task = asyncio.create_task(self._status_loop())
@@ -383,6 +388,8 @@ class Coordinator:
                 await conn.close()
             except Exception:
                 pass
+        if self._metadata_registry is not None:
+            await self._metadata_registry.close()
 
         log_event(
             logger,
@@ -500,6 +507,25 @@ class Coordinator:
             conservation=result.conservation_holds,
             recovery=result.recovery_verified,
         )
+
+        if self._metadata_registry is not None:
+            await self._metadata_registry.record_snapshot(
+                SnapshotMetadataRow(
+                    snapshot_id=self._snapshot_counter,
+                    logical_timestamp=ts,
+                    wall_clock_start=snap_start,
+                    wall_clock_end=snap_end,
+                    strategy=self._strategy_name(),
+                    participating_nodes=result.participant_node_ids or [],
+                    status=_snapshot_status(result),
+                    retry_count=result.retries,
+                    causal_consistent=result.causal_consistent,
+                    conservation_holds=result.conservation_holds,
+                    recovery_verified=result.recovery_verified,
+                    archive_paths=result.archive_paths or [],
+                    notes=result.failure_reason,
+                )
+            )
 
         if self._on_snapshot_complete:
             self._on_snapshot_complete(
@@ -829,3 +855,11 @@ class Coordinator:
             return
         if node_id in balances:
             self._last_known_balances[node_id] = balances[node_id]
+
+
+def _snapshot_status(result: SnapshotResult) -> str:
+    if result.skipped:
+        return "skipped"
+    if result.success:
+        return "committed"
+    return "failed"

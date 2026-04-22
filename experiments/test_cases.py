@@ -64,6 +64,13 @@ def _mysql_cfg(host: str, password: str) -> list[dict]:
     return cfg
 
 
+def _parse_float_metric(value: str) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 @dataclass
 class TCResult:
     name:    str
@@ -204,7 +211,9 @@ async def tc1_no_contention(mysql_cfgs: list[dict]) -> TCResult:
         csv_path = await run_single(config, rep=1, output_dir=tmp)
         with open(csv_path) as f:
             for row in _csv.DictReader(f):
-                metrics[row["metric"]] = float(row["value"])
+                value = _parse_float_metric(row["value"])
+                if value is not None:
+                    metrics[row["metric"]] = value
 
     retries       = metrics.get("avg_retry_rate", -1)
     snap_count    = int(metrics.get("snapshot_count", 0))
@@ -257,13 +266,13 @@ async def tc2_causal_violation(mysql_cfgs: list[dict]) -> TCResult:
     """
     Manually orchestrate a split transfer so that CAUSE is pre-snapshot and
     EFFECT is post-snapshot (i.e., EFFECT arrives during the snapshot window
-    with timestamp ≤ snapshot_ts).
+    with timestamp > snapshot_ts).
 
     Sequence:
       ts=5   CAUSE write to node 0  (dep_tag=9999, balance_delta=-1000)
       ts=10  SNAP_NOW all nodes     (snapshot_ts=10)
-      ts=8   EFFECT write to node 1 (dep_tag=9999, balance_delta=+1000,
-                                     ts=8 ≤ snapshot_ts=10 → goes into write log)
+      ts=11  EFFECT write to node 1 (dep_tag=9999, balance_delta=+1000,
+                                     ts=11 > snapshot_ts=10 -> goes into write log)
 
     Expected outcome:
       • Causal validator returns INCONSISTENT
@@ -304,11 +313,11 @@ async def tc2_causal_violation(mysql_cfgs: list[dict]) -> TCResult:
             assert resp and resp.get("type") == MessageType.SNAPPED.value, \
                 f"Node {nid} SNAP_NOW failed: {resp}"
 
-        # 3. EFFECT write to node 1 AFTER snapshot started, but ts=8 ≤ snapshot_ts=10
+        # 3. EFFECT write to node 1 AFTER snapshot started, with ts=11 > snapshot_ts=10
         #    → node 1 adds this to its write log
-        detail.append("Step 3: EFFECT write to node 1 (ts=8 ≤ snapshot_ts=10 → goes into write log)")
+        detail.append("Step 3: EFFECT write to node 1 (ts=11 > snapshot_ts=10 -> goes into write log)")
         resp = await _send(
-            conns[1], "WRITE", ts=8,
+            conns[1], "WRITE", ts=11,
             block_id=10, data=DATA_B64,
             dep_tag=DEP_TAG, role="EFFECT", partner=0,
             balance_delta=+AMOUNT,
@@ -633,7 +642,9 @@ async def tc5_speculative_degrades(mysql_cfgs: list[dict]) -> TCResult:
             csv_path = await run_single(config, rep=1, output_dir=tmp)
             with open(csv_path) as f:
                 for row in _csv.DictReader(f):
-                    metrics[row["metric"]] = float(row["value"])
+                    value = _parse_float_metric(row["value"])
+                    if value is not None:
+                        metrics[row["metric"]] = value
 
         results[label] = {
             "ratio":          ratio,

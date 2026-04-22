@@ -24,6 +24,7 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from snapspec.coordinator.coordinator import Coordinator
 from snapspec.logging_utils import configure_logging
+from snapspec.metadata.registry import SnapshotMetadataRegistry
 from snapspec.workload.generator import WorkloadGenerator
 from snapspec.metrics.collector import MetricsCollector
 
@@ -65,6 +66,24 @@ def create_mysql_nodes(config: dict):
             )
         )
     return nodes
+
+
+def build_metadata_registry(config: dict, rep: int, output_dir: str) -> SnapshotMetadataRegistry:
+    if config.get("block_store_type") == "mysql":
+        mysql_node = config["mysql"]["nodes"][0]
+        return SnapshotMetadataRegistry.for_mysql(
+            host=mysql_node["host"],
+            port=int(mysql_node.get("port", 3306)),
+            user=mysql_node["user"],
+            password=mysql_node["password"],
+            database=mysql_node["database"],
+        )
+    return SnapshotMetadataRegistry.for_sqlite(
+        os.path.join(
+            output_dir,
+            f"{config['experiment']}_{config['config_name']}_{config.get('param_value', 'default')}_rep{rep}_snapshot_metadata.db",
+        )
+    )
 
 
 def get_strategy(name: str):
@@ -251,6 +270,7 @@ async def run_single(config: dict, rep: int, output_dir: str) -> str:
             min_snapshot_nodes=config.get("min_snapshot_nodes"),
             shutdown_timeout_s=float(config.get("shutdown_timeout_s", 30.0)),
             shutdown_nodes_on_stop=bool(config.get("shutdown_nodes_on_stop", False)),
+            metadata_registry=build_metadata_registry(config, rep, output_dir),
         )
         coordinator.expected_total = total_tokens
         await coordinator.start()

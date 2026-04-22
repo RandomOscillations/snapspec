@@ -153,6 +153,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
         return SnapshotResult(
             success=True,
             participant_node_ids=responding_node_ids,
+            archive_paths=_extract_archive_paths(commit_responses),
             causal_consistent=True,
             causal_violation_count=0,
             conservation_holds=conservation_ok,
@@ -169,3 +170,11 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             causal_consistent=False,
             causal_violation_count=len(violations),
         )
+
+
+def _extract_archive_paths(responses: list[dict | None]) -> list[str]:
+    return [
+        response["archive_path"]
+        for response in responses
+        if response is not None and response.get("archive_path")
+    ]

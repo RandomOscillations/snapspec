@@ -26,6 +26,8 @@ from ..network.protocol import MessageType
 logger = logging.getLogger(__name__)
 
 _PAUSED_RETRY_DELAY_S = 0.005
+_NODE_FAILURE_COOLDOWN_S = 3.0
+_NODE_UNAVAILABLE_SLEEP_S = 0.05
 
 
 class WorkloadGenerator:
@@ -75,6 +77,7 @@ class WorkloadGenerator:
         self._transfer_idle = asyncio.Event()
         self._transfer_idle.set()
         self._shutdown_timeout_s = 30.0
+        self._node_backoff_until: dict[int, float] = {}
 
     @property
     def transfer_amounts(self) -> dict[int, int]:
@@ -181,11 +184,9 @@ class WorkloadGenerator:
             try:
                 if (not self._draining
                         and self._rng.random() < self._cross_node_ratio):
-                    await self._do_cross_node_transfer()
-                    writes_this_iter = 2
+                    writes_this_iter = await self._do_cross_node_transfer()
                 else:
-                    await self._do_local_write()
-                    writes_this_iter = 1
+                    writes_this_iter = await self._do_local_write()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -206,12 +207,20 @@ class WorkloadGenerator:
             if elapsed < target:
                 await asyncio.sleep(target - elapsed)
 
-    async def _do_cross_node_transfer(self):
+    async def _do_cross_node_transfer(self) -> int:
         """Execute a token transfer between two nodes."""
         self._transfer_idle.clear()
         try:
-            source = self._rng.choice(self._node_ids)
-            dest = self._rng.choice([n for n in self._node_ids if n != source])
+            source_candidates = self._available_node_ids(require_positive_balance=True)
+            if not source_candidates:
+                await asyncio.sleep(_NODE_UNAVAILABLE_SLEEP_S)
+                return 0
+            source = self._rng.choice(source_candidates)
+            dest_candidates = self._available_node_ids(exclude={source})
+            if not dest_candidates:
+                await asyncio.sleep(_NODE_UNAVAILABLE_SLEEP_S)
+                return 0
+            dest = self._rng.choice(dest_candidates)
 
             max_amount = max(1, self._balances[source] // 10)
             amount = self._rng.randint(1, max_amount)
@@ -265,12 +274,17 @@ class WorkloadGenerator:
                     dep_tag=dep_tag,
                     total_transfers=self._transfer_count,
                 )
+            return 2
         finally:
             self._transfer_idle.set()
 
-    async def _do_local_write(self):
+    async def _do_local_write(self) -> int:
         """Write random data to a random block on a random node."""
-        node_id = self._rng.choice(self._node_ids)
+        candidates = self._available_node_ids()
+        if not candidates:
+            await asyncio.sleep(_NODE_UNAVAILABLE_SLEEP_S)
+            return 0
+        node_id = self._rng.choice(candidates)
         block_id = self._rng.randint(0, self._total_blocks - 1)
         data = os.urandom(self._block_size)
         ts = self._get_timestamp()
@@ -285,6 +299,7 @@ class WorkloadGenerator:
             partner=-1,
             balance_delta=0,
         )
+        return 1
 
     async def _send_write_with_retry(
         self,
@@ -314,6 +329,7 @@ class WorkloadGenerator:
             )
 
             if resp is None:
+                self._mark_node_unavailable(node_id)
                 raise ConnectionError(f"Node {node_id} closed connection")
 
             if resp.get("type") == MessageType.WRITE_ACK.value:
@@ -345,3 +361,24 @@ class WorkloadGenerator:
                 continue
 
             raise RuntimeError(f"Unexpected response from node {node_id}: {resp}")
+
+    def _available_node_ids(
+        self,
+        *,
+        exclude: set[int] | None = None,
+        require_positive_balance: bool = False,
+    ) -> list[int]:
+        now = time.monotonic()
+        excluded = exclude or set()
+        return [
+            node_id
+            for node_id in self._node_ids
+            if node_id not in excluded
+            and self._node_backoff_until.get(node_id, 0.0) <= now
+            and (not require_positive_balance or self._balances[node_id] > 0)
+        ]
+
+    def _mark_node_unavailable(self, node_id: int):
+        self._node_backoff_until[node_id] = (
+            time.monotonic() + _NODE_FAILURE_COOLDOWN_S
+        )

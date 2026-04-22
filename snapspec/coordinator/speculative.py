@@ -175,6 +175,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                 success=True,
                 retries=attempt,
                 participant_node_ids=responding_node_ids,
+                archive_paths=_extract_archive_paths(commit_responses),
                 delta_blocks_at_discard=delta_blocks_at_discard,
                 causal_consistent=True,
                 causal_violation_count=0,
@@ -210,6 +211,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
         success=fallback_result.success,
         retries=max_retries + 1,  # indicates fallback was used
         participant_node_ids=fallback_result.participant_node_ids,
+        archive_paths=fallback_result.archive_paths,
         delta_blocks_at_discard=delta_blocks_at_discard,
         causal_consistent=fallback_result.causal_consistent,
         causal_violation_count=fallback_result.causal_violation_count,
@@ -227,6 +229,14 @@ def _extract_delta_blocks(responses: list[dict | None]) -> list[int]:
         if r is not None and "delta_blocks" in r:
             blocks.append(r["delta_blocks"])
     return blocks
+
+
+def _extract_archive_paths(responses: list[dict | None]) -> list[str]:
+    return [
+        response["archive_path"]
+        for response in responses
+        if response is not None and response.get("archive_path")
+    ]
 
 
 def _should_fallback_early(

@@ -18,6 +18,7 @@ class SnapshotResult:
     skipped: bool = False
     retries: int = 0
     participant_node_ids: list[int] | None = None
+    archive_paths: list[str] | None = None
     failure_reason: str | None = None
     delta_blocks_at_discard: list[int] | None = None
     # Accuracy fields — populated by each strategy

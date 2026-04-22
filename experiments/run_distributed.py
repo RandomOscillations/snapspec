@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from snapspec.coordinator.coordinator import Coordinator
 from snapspec.logging_utils import configure_logging
+from snapspec.metadata.registry import SnapshotMetadataRegistry
 from snapspec.metrics.collector import MetricsCollector
 from snapspec.network.connection import NodeConnection
 from snapspec.network.protocol import MessageType
@@ -126,6 +127,24 @@ def build_metrics_identity(strategy_name: str, cfg: dict) -> tuple[str, str, str
     return experiment_name, config_name, str(param_name), rep
 
 
+def build_metadata_registry(cfg: dict, strategy_name: str) -> SnapshotMetadataRegistry:
+    experiment_name, config_name, param_name, rep = build_metrics_identity(strategy_name, cfg)
+    if cfg.get("metadata_backend") == "mysql":
+        return SnapshotMetadataRegistry.for_mysql(
+            host=cfg["metadata_mysql_host"],
+            port=cfg["metadata_mysql_port"],
+            user=cfg["metadata_mysql_user"],
+            password=cfg["metadata_mysql_password"],
+            database=cfg["metadata_mysql_database"],
+        )
+    return SnapshotMetadataRegistry.for_sqlite(
+        os.path.join(
+            cfg["output_dir"],
+            f"{experiment_name}_{config_name}_{param_name}_rep{rep}_snapshot_metadata.db",
+        )
+    )
+
+
 async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> tuple[dict, MetricsCollector]:
     total_tokens = cfg["total_tokens"]
     experiment_name, config_name, param_name, rep = build_metrics_identity(strategy_name, cfg)
@@ -153,6 +172,7 @@ async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> tu
         min_snapshot_nodes=cfg.get("min_snapshot_nodes"),
         shutdown_timeout_s=float(cfg.get("shutdown_timeout_s", 30.0)),
         shutdown_nodes_on_stop=bool(cfg.get("shutdown_nodes_on_stop", False)),
+        metadata_registry=build_metadata_registry(cfg, strategy_name),
     )
     await coordinator.start()
 
@@ -251,6 +271,7 @@ async def main():
     strategies = STRATEGIES if strategy_env == "all" else [strategy_env]
 
     total_tokens = int(os.environ.get("SNAPSPEC_TOTAL_TOKENS", "100000"))
+    output_dir = os.environ.get("SNAPSPEC_OUTPUT_DIR", "results")
     cfg = {
         "total_tokens": total_tokens,
         "duration_s": float(os.environ.get("SNAPSPEC_DURATION", "15")),
@@ -280,8 +301,17 @@ async def main():
         "shutdown_nodes_on_stop": (
             os.environ.get("SNAPSPEC_SHUTDOWN_NODES_ON_STOP", "false").lower() == "true"
         ),
+        "output_dir": output_dir,
+        "metadata_backend": os.environ.get(
+            "SNAPSPEC_METADATA_BACKEND",
+            "mysql" if os.environ.get("SNAPSPEC_CONFIG_PREFIX", "row") == "mysql" else "sqlite",
+        ),
+        "metadata_mysql_host": os.environ.get("SNAPSPEC_METADATA_MYSQL_HOST", "mysql0"),
+        "metadata_mysql_port": int(os.environ.get("SNAPSPEC_METADATA_MYSQL_PORT", "3306")),
+        "metadata_mysql_user": os.environ.get("SNAPSPEC_METADATA_MYSQL_USER", "root"),
+        "metadata_mysql_password": os.environ.get("SNAPSPEC_METADATA_MYSQL_PASSWORD", "snapspec"),
+        "metadata_mysql_database": os.environ.get("SNAPSPEC_METADATA_MYSQL_DATABASE", "snapspec_node_0"),
     }
-    output_dir = os.environ.get("SNAPSPEC_OUTPUT_DIR", "results")
 
     netem_delay = int(os.environ.get("SNAPSPEC_NETEM_DELAY_MS", "0"))
     apply_netem(netem_delay)

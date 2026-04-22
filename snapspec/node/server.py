@@ -621,7 +621,7 @@ class StorageNode:
             archive=archive_path,
             balance=self._balance,
         )
-        await self._send(writer, MessageType.ACK, ts)
+        await self._send(writer, MessageType.ACK, ts, archive_path=archive_path)
 
     async def _handle_abort(self, msg: dict, writer: asyncio.StreamWriter):
         ts = msg["logical_timestamp"]

@@ -44,10 +44,8 @@ class MySQLStorageNode(StorageNode):
         await super().start()
 
     async def stop(self):
-        if self._snapshot_conn is not None:
-            await self._mysql_bs.close_snapshot_conn_async(self._snapshot_conn)
-            self._snapshot_conn = None
         await super().stop()
+        await self._close_snapshot_view()
         await self._mysql_bs.close()
 
     async def _cleanup_for_shutdown_locked(self, reason: str):
@@ -77,7 +75,13 @@ class MySQLStorageNode(StorageNode):
 
     async def _close_snapshot_view(self):
         if self._snapshot_conn is not None:
-            await self._mysql_bs.close_snapshot_conn_async(self._snapshot_conn)
+            try:
+                await self._mysql_bs.close_snapshot_conn_async(self._snapshot_conn)
+            except AssertionError:
+                logger.debug(
+                    "Node %d: snapshot connection already released during shutdown",
+                    self.node_id,
+                )
             self._snapshot_conn = None
 
     async def _handle_write(self, msg: dict, writer):
@@ -177,6 +181,7 @@ class MySQLStorageNode(StorageNode):
             snapshot_ts = self.snapshot_ts
             snapshot_conn = self._snapshot_conn
             snapshot_balance = self._snapshot_balance if self._snapshot_balance is not None else self._balance
+            archive_path = f"mysql://node{self.node_id}/snap/{snapshot_ts}"
 
             # Transition state immediately — writes can resume
             self._mysql_bs.commit_snapshot()
@@ -186,11 +191,11 @@ class MySQLStorageNode(StorageNode):
 
         # Heavy MySQL archival OUTSIDE the lock — writes are not blocked
         await self._mysql_bs.archive_snapshot_async(snapshot_ts, snapshot_conn)
-        self._archive_balances[f"mysql://node{self.node_id}/snap/{snapshot_ts}"] = snapshot_balance
+        self._archive_balances[archive_path] = snapshot_balance
         await self._close_snapshot_view()
 
         logger.debug("Node %d: COMMITTED (MySQL) snapshot ts=%d", self.node_id, snapshot_ts)
-        await self._send(writer, MessageType.ACK, ts)
+        await self._send(writer, MessageType.ACK, ts, archive_path=archive_path)
 
     async def _handle_abort(self, msg: dict, writer):
         ts = msg["logical_timestamp"]
