@@ -25,6 +25,7 @@ import random
 import time
 from typing import Any
 
+from ..hlc import HybridLogicalClock
 from ..network.connection import NodeConnection
 from ..network.protocol import MessageType
 
@@ -76,9 +77,8 @@ class NodeWorkload:
 
         self._rng = random.Random(seed)
 
-        # Local clock — independent per node, monotonically increasing.
-        # Will be replaced by HLC later.
-        self._local_clock: int = 0
+        # Hybrid Logical Clock — independent per node
+        self._hlc = HybridLogicalClock()
 
         # Connections: local node + remote nodes
         self._local_conn: NodeConnection | None = None
@@ -104,9 +104,8 @@ class NodeWorkload:
     # ── Clock ──────────────────────────────────────────────────────────
 
     def tick(self) -> int:
-        """Increment and return the local clock."""
-        self._local_clock += 1
-        return self._local_clock
+        """Advance and return the HLC timestamp."""
+        return self._hlc.tick()
 
     # ── Properties ─────────────────────────────────────────────────────
 
@@ -303,6 +302,10 @@ class NodeWorkload:
                 )
 
             if resp.get("type") == MessageType.WRITE_ACK.value:
+                # Merge HLC with the response
+                remote_ts = resp.get("logical_timestamp", 0)
+                if remote_ts:
+                    self._hlc.receive(remote_ts)
                 self._writes_completed += 1
                 return
 

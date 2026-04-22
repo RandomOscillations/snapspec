@@ -181,16 +181,19 @@ class TestTriggerSnapshot:
         coord = Coordinator(configs, _simple_strategy, **_NO_BG_TASKS)
         await coord.start()
 
-        assert coord._logical_clock == 1  # from PING in start()
+        ts_after_start = coord._hlc.now()
+        assert ts_after_start > 0  # HLC is initialized
 
         result = await coord.trigger_snapshot()
         assert result.success
-        assert coord._logical_clock == 2
+        ts_after_snap1 = coord._hlc.now()
+        assert ts_after_snap1 > ts_after_start  # monotonically increasing
         assert coord._snapshot_counter == 1
 
         result = await coord.trigger_snapshot()
         assert result.success
-        assert coord._logical_clock == 3
+        ts_after_snap2 = coord._hlc.now()
+        assert ts_after_snap2 > ts_after_snap1  # still increasing
         assert coord._snapshot_counter == 2
 
         await coord.stop()
