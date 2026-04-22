@@ -146,6 +146,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                     coordinator.transfer_amounts,
                     adjusted_expected_total,
                     participating_node_ids=set(responding_node_ids),
+                    pending_transfers=coordinator.pending_transfer_records,
                 )
                 conservation_ok = cons.valid
                 if not cons.valid:

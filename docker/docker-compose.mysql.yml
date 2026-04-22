@@ -56,6 +56,25 @@ services:
       snapnet:
         ipv4_address: 10.11.0.22
 
+  mysql_meta:
+    image: mysql:8.0
+    container_name: snapspec-mysql-meta
+    hostname: mysql_meta
+    environment:
+      MYSQL_ROOT_PASSWORD: snapspec
+      MYSQL_DATABASE: snapspec_metadata
+    ports:
+      - "3309:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-psnapspec"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    networks:
+      snapnet:
+        ipv4_address: 10.11.0.23
+
   node0:
     build:
       context: ..
@@ -226,11 +245,22 @@ services:
       SNAPSPEC_STATUS_INTERVAL_S: ${SNAPSPEC_STATUS_INTERVAL_S:-5.0}
       SNAPSPEC_MIN_SNAPSHOT_NODES: ${SNAPSPEC_MIN_SNAPSHOT_NODES:-2}
       SNAPSPEC_NETEM_DELAY_MS: ${SNAPSPEC_NETEM_DELAY_MS:-0}
+      SNAPSPEC_METADATA_BACKEND: ${SNAPSPEC_METADATA_BACKEND:-mysql}
+      SNAPSPEC_METADATA_MYSQL_HOST: ${SNAPSPEC_METADATA_MYSQL_HOST:-mysql_meta}
+      SNAPSPEC_METADATA_MYSQL_PORT: ${SNAPSPEC_METADATA_MYSQL_PORT:-3306}
+      SNAPSPEC_METADATA_MYSQL_USER: ${SNAPSPEC_METADATA_MYSQL_USER:-root}
+      SNAPSPEC_METADATA_MYSQL_PASSWORD: ${SNAPSPEC_METADATA_MYSQL_PASSWORD:-snapspec}
+      SNAPSPEC_METADATA_MYSQL_DATABASE: ${SNAPSPEC_METADATA_MYSQL_DATABASE:-snapspec_metadata}
       SNAPSPEC_LOG_DIR: /app/logs
     depends_on:
-      - node0
-      - node1
-      - node2
+      node0:
+        condition: service_started
+      node1:
+        condition: service_started
+      node2:
+        condition: service_started
+      mysql_meta:
+        condition: service_healthy
     volumes:
       - ../results:/app/results
       - ./logs:/app/logs

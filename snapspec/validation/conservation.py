@@ -36,6 +36,7 @@ def validate_conservation(
     transfer_amounts: dict[int, int],
     expected_total: int,
     participating_node_ids: set[int] | None = None,
+    pending_transfers: dict[int, dict] | None = None,
 ) -> ConservationResult:
     """Validate token conservation across a snapshot.
 
@@ -78,6 +79,7 @@ def validate_conservation(
 
     in_transit_total = 0
     in_transit_tags: list[int] = []
+    counted_tags: set[int] = set()
     for tag, post_roles in tag_to_post_roles.items():
         if tag in skipped_tags:
             continue
@@ -87,11 +89,42 @@ def validate_conservation(
             amount = transfer_amounts.get(tag, 0)
             in_transit_total += amount
             in_transit_tags.append(tag)
+            counted_tags.add(tag)
+
+    # Outbox-backed transfers cover the failure case where the debit reached
+    # the source node, but the credit has not yet reached the destination node.
+    # If the debit is already in the snapshot and the credit is still pending,
+    # those tokens are in transit even when the destination node is unavailable
+    # and therefore cannot contribute an EFFECT write-log entry.
+    for tag, pending in (pending_transfers or {}).items():
+        if tag in skipped_tags or tag in counted_tags:
+            continue
+        source_node_id = pending.get("source_node_id")
+        dest_node_id = pending.get("dest_node_id")
+        if participating_node_ids is not None and source_node_id not in participating_node_ids:
+            continue
+
+        post_roles = tag_to_post_roles.get(tag, set())
+        if "CAUSE" in post_roles or "EFFECT" in post_roles:
+            continue
+
+        amount = int(pending.get("amount", transfer_amounts.get(tag, 0)))
+        if amount <= 0:
+            continue
+        in_transit_total += amount
+        in_transit_tags.append(tag)
+        counted_tags.add(tag)
 
     post_role_samples = [
         f"tag={tag}:roles={','.join(sorted(post_roles))}:amount={transfer_amounts.get(tag, 0)}"
         for tag, post_roles in sorted(tag_to_post_roles.items())[:10]
     ]
+    if pending_transfers:
+        post_role_samples.extend(
+            f"tag={tag}:pending_effect:{pending.get('source_node_id')}->{pending.get('dest_node_id')}:amount={pending.get('amount', 0)}"
+            for tag, pending in list(sorted(pending_transfers.items()))[:10]
+            if tag in counted_tags
+        )
 
     observed_total = balance_sum + in_transit_total
 

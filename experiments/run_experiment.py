@@ -24,6 +24,7 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from snapspec.coordinator.coordinator import Coordinator
 from snapspec.logging_utils import configure_logging
+from snapspec.metadata.outbox import PendingTransferOutbox
 from snapspec.metadata.registry import SnapshotMetadataRegistry
 from snapspec.workload.generator import WorkloadGenerator
 from snapspec.metrics.collector import MetricsCollector
@@ -82,6 +83,52 @@ def build_metadata_registry(config: dict, rep: int, output_dir: str) -> Snapshot
         os.path.join(
             output_dir,
             f"{config['experiment']}_{config['config_name']}_{config.get('param_value', 'default')}_rep{rep}_snapshot_metadata.db",
+        )
+    )
+
+
+def build_outbox_run_id(config: dict, rep: int) -> str:
+    explicit = config.get("outbox_run_id")
+    if explicit:
+        return str(explicit)
+    return (
+        f"{config['experiment']}:{config['config_name']}:"
+        f"{config.get('param_value', 'default')}:rep{rep}"
+    )
+
+
+async def resolve_outbox_run_id(
+    outbox: PendingTransferOutbox,
+    config: dict,
+    rep: int,
+) -> str:
+    if config.get("recover_outbox") and not config.get("outbox_run_id"):
+        latest = await outbox.latest_run_id()
+        if latest:
+            logger.info("Recovering pending transfer outbox run_id=%s", latest)
+            return latest
+        logger.warning("recover_outbox=true but no prior outbox run id was found")
+
+    run_id = build_outbox_run_id(config, rep)
+    await outbox.register_run(run_id)
+    logger.info("Registered pending transfer outbox run_id=%s", run_id)
+    return run_id
+
+
+def build_pending_outbox(config: dict, rep: int, output_dir: str) -> PendingTransferOutbox:
+    if config.get("block_store_type") == "mysql":
+        mysql_node = config["mysql"]["nodes"][0]
+        return PendingTransferOutbox.for_mysql(
+            host=mysql_node["host"],
+            port=int(mysql_node.get("port", 3306)),
+            user=mysql_node["user"],
+            password=mysql_node["password"],
+            database=mysql_node["database"],
+        )
+    return PendingTransferOutbox.for_sqlite(
+        os.path.join(
+            output_dir,
+            f"{config['experiment']}_{config['config_name']}_{config.get('param_value', 'default')}_rep{rep}_pending_outbox.db",
         )
     )
 
@@ -212,6 +259,8 @@ async def run_single(config: dict, rep: int, output_dir: str) -> str:
     num_nodes = config["num_nodes"]
     total_tokens = config.get("total_tokens", 1_000_000)
     bs_type = config.get("block_store_type", "mock")
+    pending_outbox = build_pending_outbox(config, rep, output_dir)
+    outbox_run_id = await resolve_outbox_run_id(pending_outbox, config, rep)
 
     # 1. Start storage nodes
     node_procs = []
@@ -286,6 +335,8 @@ async def run_single(config: dict, rep: int, output_dir: str) -> str:
             total_blocks=config.get("total_blocks", 256),
             seed=config.get("seed"),
             effect_delay_s=config.get("effect_delay_s", 0.0),
+            pending_outbox=pending_outbox,
+            outbox_run_id=outbox_run_id,
         )
         await workload.start()
         coordinator.set_workload(workload)

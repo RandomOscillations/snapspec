@@ -100,6 +100,13 @@ class MySQLStorageNode(StorageNode):
             balance_delta = msg.get("balance_delta", 0)
 
             if balance_delta != 0:
+                already_applied = await self._mysql_bs.has_transfer_leg_async(
+                    dep_tag,
+                    role_str,
+                )
+                if already_applied:
+                    await self._send(writer, MessageType.WRITE_ACK, ts, block_id=block_id)
+                    return
                 await self._mysql_bs.update_balance_async(block_id, balance_delta)
                 await self._mysql_bs.insert_transaction_async(
                     dep_tag=dep_tag,

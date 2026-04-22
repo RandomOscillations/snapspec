@@ -17,9 +17,11 @@ import logging
 import os
 import random
 import time
+from dataclasses import dataclass
 from typing import Callable
 
 from ..logging_utils import log_event
+from ..metadata.outbox import PendingTransferOutbox, PendingTransferOutboxRow
 from ..network.connection import NodeConnection
 from ..network.protocol import MessageType
 
@@ -28,6 +30,22 @@ logger = logging.getLogger(__name__)
 _PAUSED_RETRY_DELAY_S = 0.005
 _NODE_FAILURE_COOLDOWN_S = 3.0
 _NODE_UNAVAILABLE_SLEEP_S = 0.05
+_PENDING_RETRY_BASE_S = 0.25
+_PENDING_RETRY_MAX_S = 5.0
+
+
+@dataclass
+class PendingTransfer:
+    """Credit leg that must be replayed after the debit has committed."""
+
+    dep_tag: int
+    source: int
+    dest: int
+    block_id: int
+    data: bytes
+    amount: int
+    attempts: int = 0
+    next_retry_at: float = 0.0
 
 
 class WorkloadGenerator:
@@ -44,6 +62,8 @@ class WorkloadGenerator:
         total_blocks: int = 256,
         seed: int | None = None,
         effect_delay_s: float = 0.0,
+        pending_outbox: PendingTransferOutbox | None = None,
+        outbox_run_id: str = "default",
     ):
         self._node_configs = node_configs
         self._write_rate = write_rate
@@ -53,6 +73,8 @@ class WorkloadGenerator:
         self._block_size = block_size
         self._total_blocks = total_blocks
         self._effect_delay_s = effect_delay_s
+        self._pending_outbox = pending_outbox
+        self._outbox_run_id = outbox_run_id
 
         self._rng = random.Random(seed)
         self._node_ids = [cfg["node_id"] for cfg in node_configs]
@@ -65,6 +87,7 @@ class WorkloadGenerator:
         self._balances[self._node_ids[0]] += total_tokens - per_node * num_nodes
 
         self._transfer_amounts: dict[int, int] = {}
+        self._pending_effects: dict[int, PendingTransfer] = {}
         self._dep_tag_counter = 0
 
         self._writes_per_node: dict[int, int] = {nid: 0 for nid in self._node_ids}
@@ -84,6 +107,18 @@ class WorkloadGenerator:
         return dict(self._transfer_amounts)
 
     @property
+    def pending_transfer_records(self) -> dict[int, dict]:
+        return {
+            tag: {
+                "amount": pending.amount,
+                "source_node_id": pending.source,
+                "dest_node_id": pending.dest,
+                "attempts": pending.attempts,
+            }
+            for tag, pending in self._pending_effects.items()
+        }
+
+    @property
     def writes_completed(self) -> int:
         return self._writes_completed
 
@@ -97,6 +132,10 @@ class WorkloadGenerator:
 
     async def start(self):
         """Connect to all nodes and start the write loop."""
+        if self._pending_outbox is not None:
+            await self._pending_outbox.start()
+            await self._load_pending_effects_from_outbox()
+
         for cfg in self._node_configs:
             conn = NodeConnection(
                 node_id=cfg["node_id"],
@@ -125,6 +164,10 @@ class WorkloadGenerator:
             nodes=len(self._node_ids),
         )
 
+    async def close_outbox(self):
+        if self._pending_outbox is not None:
+            await self._pending_outbox.close()
+
     async def stop(self):
         """Drain then stop so an in-flight transfer pair can finish."""
         self._running = False
@@ -149,11 +192,14 @@ class WorkloadGenerator:
                 except asyncio.CancelledError:
                     pass
 
+        await self._drain_pending_effects_for_shutdown()
+
         for conn in self._connections.values():
             try:
                 await conn.close()
             except Exception:
                 pass
+        await self.close_outbox()
 
         log_event(
             logger,
@@ -161,7 +207,26 @@ class WorkloadGenerator:
             event="workload_stop",
             writes_completed=self._writes_completed,
             transfers_tracked=len(self._transfer_amounts),
+            pending_transfers=len(self._pending_effects),
         )
+
+    async def _drain_pending_effects_for_shutdown(self):
+        """Best-effort replay of completed debits before connections close."""
+        deadline = time.monotonic() + self._shutdown_timeout_s
+        while self._pending_effects and time.monotonic() < deadline:
+            writes = await self._flush_pending_effects()
+            if writes == 0:
+                await asyncio.sleep(_NODE_UNAVAILABLE_SLEEP_S)
+
+        if self._pending_effects:
+            log_event(
+                logger,
+                component="workload",
+                event="transfer_pending_unresolved",
+                level=logging.WARNING,
+                pending_transfers=len(self._pending_effects),
+                dep_tags=sorted(self._pending_effects.keys())[:10],
+            )
 
     async def drain(self):
         """Stop starting new cross-node transfers and wait for any in-flight transfer to complete.
@@ -182,7 +247,10 @@ class WorkloadGenerator:
             start = time.monotonic()
 
             try:
-                if (not self._draining
+                pending_writes = await self._flush_pending_effects(max_writes=1)
+                if pending_writes > 0:
+                    writes_this_iter = pending_writes
+                elif (not self._draining
                         and self._rng.random() < self._cross_node_ratio):
                     writes_this_iter = await self._do_cross_node_transfer()
                 else:
@@ -231,8 +299,6 @@ class WorkloadGenerator:
             block_id = self._rng.randint(0, self._total_blocks - 1)
             data = os.urandom(self._block_size)
 
-            self._transfer_amounts[dep_tag] = amount
-
             debit_ts = self._get_timestamp()
             await self._send_write_with_retry(
                 source,
@@ -245,38 +311,107 @@ class WorkloadGenerator:
                 balance_delta=-amount,
             )
 
+            self._balances[source] -= amount
+            self._transfer_amounts[dep_tag] = amount
+            self._pending_effects[dep_tag] = PendingTransfer(
+                dep_tag=dep_tag,
+                source=source,
+                dest=dest,
+                block_id=block_id,
+                data=data,
+                amount=amount,
+            )
+            await self._persist_pending_effect(self._pending_effects[dep_tag])
+            log_event(
+                logger,
+                component="workload",
+                event="transfer_pending",
+                source=source,
+                dest=dest,
+                amount=amount,
+                dep_tag=dep_tag,
+                pending_transfers=len(self._pending_effects),
+            )
+
             if self._effect_delay_s > 0:
                 await asyncio.sleep(self._effect_delay_s)
 
-            credit_ts = self._get_timestamp()
-            await self._send_write_with_retry(
-                dest,
-                block_id,
-                data,
-                credit_ts,
-                dep_tag=dep_tag,
-                role="EFFECT",
-                partner=source,
-                balance_delta=amount,
-            )
-
-            self._balances[source] -= amount
-            self._balances[dest] += amount
-            self._transfer_count += 1
-            if self._transfer_count <= 3 or self._transfer_count % 25 == 0:
-                log_event(
-                    logger,
-                    component="workload",
-                    event="transfer",
-                    source=source,
-                    dest=dest,
-                    amount=amount,
-                    dep_tag=dep_tag,
-                    total_transfers=self._transfer_count,
-                )
-            return 2
+            credit_writes = await self._flush_pending_effect(dep_tag)
+            return 1 + credit_writes
         finally:
             self._transfer_idle.set()
+
+    async def _flush_pending_effects(self, max_writes: int | None = None) -> int:
+        """Replay pending credit legs whose destination is available."""
+        writes = 0
+        for dep_tag in list(self._pending_effects):
+            if max_writes is not None and writes >= max_writes:
+                break
+            writes += await self._flush_pending_effect(dep_tag)
+        return writes
+
+    async def _flush_pending_effect(self, dep_tag: int) -> int:
+        pending = self._pending_effects.get(dep_tag)
+        if pending is None:
+            return 0
+
+        now = time.monotonic()
+        if pending.next_retry_at > now:
+            return 0
+        if pending.dest not in self._available_node_ids():
+            pending.next_retry_at = now + _NODE_UNAVAILABLE_SLEEP_S
+            return 0
+
+        try:
+            await self._send_write_with_retry(
+                pending.dest,
+                pending.block_id,
+                pending.data,
+                self._get_timestamp(),
+                dep_tag=pending.dep_tag,
+                role="EFFECT",
+                partner=pending.source,
+                balance_delta=pending.amount,
+            )
+        except Exception as exc:
+            pending.attempts += 1
+            await self._persist_pending_effect(pending)
+            delay = min(
+                _PENDING_RETRY_BASE_S * (2 ** max(0, pending.attempts - 1)),
+                _PENDING_RETRY_MAX_S,
+            )
+            pending.next_retry_at = time.monotonic() + delay
+            log_event(
+                logger,
+                component="workload",
+                event="transfer_pending_retry",
+                level=logging.WARNING,
+                source=pending.source,
+                dest=pending.dest,
+                amount=pending.amount,
+                dep_tag=pending.dep_tag,
+                attempt=pending.attempts,
+                retry_in_s=round(delay, 3),
+                error=exc,
+            )
+            return 0
+
+        await self._mark_pending_effect_applied(pending)
+        self._pending_effects.pop(dep_tag, None)
+        self._balances[pending.dest] += pending.amount
+        self._transfer_count += 1
+        log_event(
+            logger,
+            component="workload",
+            event="transfer",
+            source=pending.source,
+            dest=pending.dest,
+            amount=pending.amount,
+            dep_tag=pending.dep_tag,
+            total_transfers=self._transfer_count,
+            pending_transfers=len(self._pending_effects),
+        )
+        return 1
 
     async def _do_local_write(self) -> int:
         """Write random data to a random block on a random node."""
@@ -381,4 +516,59 @@ class WorkloadGenerator:
     def _mark_node_unavailable(self, node_id: int):
         self._node_backoff_until[node_id] = (
             time.monotonic() + _NODE_FAILURE_COOLDOWN_S
+        )
+
+    async def _load_pending_effects_from_outbox(self):
+        if self._pending_outbox is None:
+            return
+
+        rows = await self._pending_outbox.list_pending(self._outbox_run_id)
+        for row in rows:
+            pending = PendingTransfer(
+                dep_tag=row.dep_tag,
+                source=row.source_node_id,
+                dest=row.dest_node_id,
+                block_id=row.block_id,
+                data=row.data,
+                amount=row.amount,
+                attempts=row.attempts,
+            )
+            self._pending_effects[pending.dep_tag] = pending
+            self._transfer_amounts[pending.dep_tag] = pending.amount
+            self._dep_tag_counter = max(self._dep_tag_counter, pending.dep_tag)
+            if pending.source in self._balances:
+                self._balances[pending.source] -= pending.amount
+
+        if rows:
+            log_event(
+                logger,
+                component="workload",
+                event="transfer_outbox_loaded",
+                run_id=self._outbox_run_id,
+                pending_transfers=len(rows),
+                dep_tags=[row.dep_tag for row in rows[:10]],
+            )
+
+    async def _persist_pending_effect(self, pending: PendingTransfer):
+        if self._pending_outbox is None:
+            return
+        await self._pending_outbox.upsert_pending(
+            PendingTransferOutboxRow(
+                run_id=self._outbox_run_id,
+                dep_tag=pending.dep_tag,
+                source_node_id=pending.source,
+                dest_node_id=pending.dest,
+                block_id=pending.block_id,
+                data=pending.data,
+                amount=pending.amount,
+                attempts=pending.attempts,
+            )
+        )
+
+    async def _mark_pending_effect_applied(self, pending: PendingTransfer):
+        if self._pending_outbox is None:
+            return
+        await self._pending_outbox.mark_applied(
+            self._outbox_run_id,
+            pending.dep_tag,
         )

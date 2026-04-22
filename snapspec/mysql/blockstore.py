@@ -114,6 +114,10 @@ class MySQLBlockStore:
         remainder = total_per_node - per_account * self._num_accounts
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:
+                await cur.execute("SELECT COUNT(*) FROM accounts")
+                row = await cur.fetchone()
+                if int(row[0]) > 0:
+                    return
                 await cur.execute("DELETE FROM accounts")
                 for i in range(self._num_accounts):
                     balance = per_account + (remainder if i == 0 else 0)
@@ -157,6 +161,23 @@ class MySQLBlockStore:
                     """,
                     (dep_tag, account_id, partner_node, role, amount, logical_ts),
                 )
+
+    async def has_transfer_leg_async(self, dep_tag: int, role: str) -> bool:
+        """Return True if this transfer leg was already applied on this node."""
+        if self.pool is None or dep_tag <= 0 or role == "NONE":
+            return False
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    SELECT 1
+                    FROM transactions
+                    WHERE dep_tag = %s AND role = %s
+                    LIMIT 1
+                    """,
+                    (dep_tag, role),
+                )
+                return await cur.fetchone() is not None
 
     async def reset_async(self, total_per_node: int):
         """Compatibility helper retained from mysql-integration."""

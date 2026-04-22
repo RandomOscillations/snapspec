@@ -410,6 +410,15 @@ class Coordinator:
         """Register the workload generator for drain coordination."""
         self._workload = workload
 
+    @property
+    def pending_transfer_records(self) -> dict[int, dict]:
+        if self._workload is None:
+            return {}
+        records = getattr(self._workload, "pending_transfer_records", None)
+        if records is None:
+            return {}
+        return records
+
     async def drain_workload(self) -> None:
         """Drain in-flight transfers in the workload generator.
 

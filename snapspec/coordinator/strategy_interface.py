@@ -44,6 +44,7 @@ class CoordinatorProtocol(Protocol):
     # --- Accuracy validation ---
     expected_total: int                        # 0 means conservation check disabled
     transfer_amounts: dict[int, int]           # dep_tag -> amount, updated by workload
+    pending_transfer_records: dict[int, dict]  # dep_tag -> pending credit metadata
 
     def tick(self) -> int:
         """Increment and return the logical clock. Thread-safe."""

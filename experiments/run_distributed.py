@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from snapspec.coordinator.coordinator import Coordinator
 from snapspec.logging_utils import configure_logging
+from snapspec.metadata.outbox import PendingTransferOutbox
 from snapspec.metadata.registry import SnapshotMetadataRegistry
 from snapspec.metrics.collector import MetricsCollector
 from snapspec.network.connection import NodeConnection
@@ -145,9 +146,55 @@ def build_metadata_registry(cfg: dict, strategy_name: str) -> SnapshotMetadataRe
     )
 
 
+def build_outbox_run_id(cfg: dict, strategy_name: str) -> str:
+    explicit = cfg.get("outbox_run_id")
+    if explicit:
+        return str(explicit)
+    experiment_name, config_name, param_name, rep = build_metrics_identity(strategy_name, cfg)
+    return f"{experiment_name}:{config_name}:{param_name}:rep{rep}"
+
+
+async def resolve_outbox_run_id(
+    outbox: PendingTransferOutbox,
+    cfg: dict,
+    strategy_name: str,
+) -> str:
+    if cfg.get("recover_outbox") and not cfg.get("outbox_run_id"):
+        latest = await outbox.latest_run_id()
+        if latest:
+            logger.info("Recovering pending transfer outbox run_id=%s", latest)
+            return latest
+        logger.warning("SNAPSPEC_RECOVER_OUTBOX=true but no prior outbox run id was found")
+
+    run_id = build_outbox_run_id(cfg, strategy_name)
+    await outbox.register_run(run_id)
+    logger.info("Registered pending transfer outbox run_id=%s", run_id)
+    return run_id
+
+
+def build_pending_outbox(cfg: dict, strategy_name: str) -> PendingTransferOutbox:
+    experiment_name, config_name, param_name, rep = build_metrics_identity(strategy_name, cfg)
+    if cfg.get("metadata_backend") == "mysql":
+        return PendingTransferOutbox.for_mysql(
+            host=cfg["metadata_mysql_host"],
+            port=cfg["metadata_mysql_port"],
+            user=cfg["metadata_mysql_user"],
+            password=cfg["metadata_mysql_password"],
+            database=cfg["metadata_mysql_database"],
+        )
+    return PendingTransferOutbox.for_sqlite(
+        os.path.join(
+            cfg["output_dir"],
+            f"{experiment_name}_{config_name}_{param_name}_rep{rep}_pending_outbox.db",
+        )
+    )
+
+
 async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> tuple[dict, MetricsCollector]:
     total_tokens = cfg["total_tokens"]
     experiment_name, config_name, param_name, rep = build_metrics_identity(strategy_name, cfg)
+    pending_outbox = build_pending_outbox(cfg, strategy_name)
+    outbox_run_id = await resolve_outbox_run_id(pending_outbox, cfg, strategy_name)
 
     metrics = MetricsCollector(
         experiment=experiment_name,
@@ -186,6 +233,8 @@ async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> tu
         total_blocks=cfg.get("total_blocks", 256),
         seed=cfg.get("seed", 42),
         effect_delay_s=cfg.get("effect_delay_s", 0.0),
+        pending_outbox=pending_outbox,
+        outbox_run_id=outbox_run_id,
     )
     await workload.start()
 
@@ -301,6 +350,8 @@ async def main():
         "shutdown_nodes_on_stop": (
             os.environ.get("SNAPSPEC_SHUTDOWN_NODES_ON_STOP", "false").lower() == "true"
         ),
+        "skip_reset": os.environ.get("SNAPSPEC_SKIP_RESET", "false").lower() == "true",
+        "recover_outbox": os.environ.get("SNAPSPEC_RECOVER_OUTBOX", "false").lower() == "true",
         "output_dir": output_dir,
         "metadata_backend": os.environ.get(
             "SNAPSPEC_METADATA_BACKEND",
@@ -311,6 +362,7 @@ async def main():
         "metadata_mysql_user": os.environ.get("SNAPSPEC_METADATA_MYSQL_USER", "root"),
         "metadata_mysql_password": os.environ.get("SNAPSPEC_METADATA_MYSQL_PASSWORD", "snapspec"),
         "metadata_mysql_database": os.environ.get("SNAPSPEC_METADATA_MYSQL_DATABASE", "snapspec_node_0"),
+        "outbox_run_id": os.environ.get("SNAPSPEC_OUTBOX_RUN_ID"),
     }
 
     netem_delay = int(os.environ.get("SNAPSPEC_NETEM_DELAY_MS", "0"))
@@ -333,13 +385,17 @@ async def main():
     print("All nodes ready.\n")
 
     balances = compute_node_balances(total_tokens, num_nodes)
-    print(f"Resetting nodes to balances: {balances}")
-    await reset_nodes(node_configs, balances)
+    skip_reset = bool(cfg.get("skip_reset", False))
+    if skip_reset:
+        print("Skipping node reset; preserving existing node database state.")
+    else:
+        print(f"Resetting nodes to balances: {balances}")
+        await reset_nodes(node_configs, balances)
 
     results = {}
     csv_paths = []
     for i, strategy in enumerate(strategies):
-        if i > 0:
+        if i > 0 and not skip_reset:
             print("  Resetting nodes...", flush=True)
             await reset_nodes(node_configs, balances)
         print(f"  [{strategy}] running...", end="", flush=True)
