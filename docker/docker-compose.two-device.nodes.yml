@@ -1,0 +1,12 @@
+services:
+  node0:
+    ports:
+      - "9000:9000"
+
+  node1:
+    ports:
+      - "9001:9000"
+
+  node2:
+    ports:
+      - "9002:9000"

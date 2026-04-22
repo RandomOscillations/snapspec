@@ -584,6 +584,123 @@ docker exec snapspec-mysql1 mysql -u root -psnapspec snapspec_node_1 -e "SHOW TA
 docker exec snapspec-mysql2 mysql -u root -psnapspec snapspec_node_2 -e "SHOW TABLES;"
 ```
 
+## Optional Two-Device Demo Setup
+
+This setup separates the coordinator from the storage nodes for a clearer distributed-system demo.
+
+```text
+Device 1:
+  coordinator
+  mysql_meta
+
+Device 2:
+  node0 + mysql0
+  node1 + mysql1
+  node2 + mysql2
+```
+
+Device 1 must have Docker available. If Device 1 is a VCL machine without Docker, `venv`, or `pip`, use a different Docker-capable machine or run the single-machine Docker demo instead.
+
+### Device 2: Start Node Services
+
+First, find the IPv4 address reachable from Device 1:
+
+```powershell
+ipconfig
+```
+
+Use the active Wi-Fi or Ethernet IPv4 address. Do not use the WSL or Hyper-V adapter address.
+
+Allow inbound node ports on Device 2. Run PowerShell as Administrator:
+
+```powershell
+New-NetFirewallRule -DisplayName "SnapSpec Node 9000" -Direction Inbound -Protocol TCP -LocalPort 9000 -Action Allow
+New-NetFirewallRule -DisplayName "SnapSpec Node 9001" -Direction Inbound -Protocol TCP -LocalPort 9001 -Action Allow
+New-NetFirewallRule -DisplayName "SnapSpec Node 9002" -Direction Inbound -Protocol TCP -LocalPort 9002 -Action Allow
+```
+
+Start the node-side containers:
+
+```powershell
+docker compose -f docker/docker-compose.mysql.yml -f docker/docker-compose.two-device.nodes.yml up -d mysql0 mysql1 mysql2 node0 node1 node2
+```
+
+The override file publishes node ports like this:
+
+```text
+node0 -> Device 2 port 9000
+node1 -> Device 2 port 9001
+node2 -> Device 2 port 9002
+```
+
+### Device 1: Verify Connectivity
+
+Replace `<DEVICE_2_IP>` with Device 2's reachable IPv4 address.
+
+On Windows PowerShell:
+
+```powershell
+Test-NetConnection <DEVICE_2_IP> -Port 9000
+Test-NetConnection <DEVICE_2_IP> -Port 9001
+Test-NetConnection <DEVICE_2_IP> -Port 9002
+```
+
+On Linux:
+
+```bash
+timeout 3 bash -c '</dev/tcp/<DEVICE_2_IP>/9000' && echo "9000 open" || echo "9000 closed"
+timeout 3 bash -c '</dev/tcp/<DEVICE_2_IP>/9001' && echo "9001 open" || echo "9001 closed"
+timeout 3 bash -c '</dev/tcp/<DEVICE_2_IP>/9002' && echo "9002 open" || echo "9002 closed"
+```
+
+All three ports should be reachable before starting the coordinator.
+
+### Device 1: Start Coordinator Metadata DB
+
+Start only the metadata database on Device 1:
+
+```powershell
+docker compose -f docker/docker-compose.mysql.yml up -d mysql_meta
+```
+
+### Device 1: Run Coordinator Against Remote Nodes
+
+Set the remote node addresses and run the coordinator:
+
+```powershell
+$env:SNAPSPEC_NODES="0:<DEVICE_2_IP>:9000,1:<DEVICE_2_IP>:9001,2:<DEVICE_2_IP>:9002"
+
+docker compose -f docker/docker-compose.mysql.yml run --rm `
+  -e SNAPSPEC_NODES=$env:SNAPSPEC_NODES `
+  -e SNAPSPEC_STRATEGY=speculative `
+  -e SNAPSPEC_EXPERIMENT=two_device_mysql_outbox `
+  -e SNAPSPEC_CONFIG_PREFIX=mysql `
+  -e SNAPSPEC_PARAM_VALUE=speculative `
+  -e SNAPSPEC_DURATION=90 `
+  -e SNAPSPEC_SNAPSHOT_INTERVAL=15 `
+  -e SNAPSPEC_WRITE_RATE=100 `
+  -e SNAPSPEC_CROSS_NODE_RATIO=0.70 `
+  coordinator
+```
+
+This keeps the coordinator and durable metadata on Device 1 while the node services and node MySQL databases run on Device 2.
+
+### Cleanup
+
+Stop Device 2 node containers:
+
+```powershell
+docker compose -f docker/docker-compose.mysql.yml -f docker/docker-compose.two-device.nodes.yml down
+```
+
+Remove the temporary firewall rules on Device 2:
+
+```powershell
+Remove-NetFirewallRule -DisplayName "SnapSpec Node 9000"
+Remove-NetFirewallRule -DisplayName "SnapSpec Node 9001"
+Remove-NetFirewallRule -DisplayName "SnapSpec Node 9002"
+```
+
 ## Summary
 
 The system separates application state from coordinator recovery metadata.
