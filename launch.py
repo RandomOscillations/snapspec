@@ -222,7 +222,7 @@ def print_results_table(results: dict):
         print(row)
 
 
-async def run_node(config: dict, node_id: int, node_only: bool = False):
+async def run_node(config: dict, node_id: int, node_only: bool = False, recover: bool = False):
     """Start a storage node with co-located workload."""
     nodes = config["nodes"]
     my_node = next(n for n in nodes if n["id"] == node_id)
@@ -242,12 +242,17 @@ async def run_node(config: dict, node_id: int, node_only: bool = False):
     archive_dir = f"/tmp/snapspec_archives/node{node_id}"
     data_dir = f"/tmp/snapspec_data/node{node_id}"
 
-    # Clean stale state from previous runs
     import shutil
-    for d in (archive_dir, data_dir):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-    os.makedirs(archive_dir, exist_ok=True)
+    if recover:
+        # Recovery mode: keep existing archives and state
+        os.makedirs(archive_dir, exist_ok=True)
+        print(f"  Recovery mode: restoring from last snapshot...")
+    else:
+        # Clean start: wipe stale state
+        for d in (archive_dir, data_dir):
+            if os.path.exists(d):
+                shutil.rmtree(d)
+        os.makedirs(archive_dir, exist_ok=True)
 
     # Build block store
     block_store = build_block_store(bs_type, node_id, block_size, total_blocks)
@@ -264,12 +269,16 @@ async def run_node(config: dict, node_id: int, node_only: bool = False):
     await node.start()
     actual_port = node.actual_port
 
+    role = "Coordinator + Node" if is_coordinator else "Node"
+    if recover:
+        role += " (RECOVERING)"
     print(f"\n{'='*60}")
     print(f"  SnapSpec Node {node_id}")
     print(f"  Listening on: 0.0.0.0:{actual_port}")
     print(f"  Local IP:     {local_ip}")
     print(f"  Block store:  {bs_type}")
-    print(f"  Role:         {'Coordinator + Node' if is_coordinator else 'Node'}")
+    print(f"  Balance:      {node._balance}")
+    print(f"  Role:         {role}")
     print(f"{'='*60}\n")
 
     remote_nodes = [
@@ -313,13 +322,15 @@ async def run_node(config: dict, node_id: int, node_only: bool = False):
             total_blocks=total_blocks,
         )
     else:
+        # In recovery mode, use the node's restored balance
+        wl_balance = node._balance if recover else per_node
         workload = NodeWorkload(
             node_id=node_id,
             local_port=actual_port,
             remote_nodes=remote_nodes,
             write_rate=wl_cfg.get("write_rate", 200),
             cross_node_ratio=wl_cfg.get("cross_node_ratio", 0.2),
-            initial_balance=per_node,
+            initial_balance=wl_balance,
             total_tokens=total_tokens,
             num_nodes=num_nodes,
             block_size=block_size,
@@ -478,6 +489,8 @@ Examples:
     parser.add_argument("--config", default="cluster.yaml", help="Cluster config file")
     parser.add_argument("--node-only", action="store_true",
                         help="Run as a node only, even if this is the coordinator node")
+    parser.add_argument("--recover", action="store_true",
+                        help="Recovery mode: restore from last snapshot instead of clean start")
     parser.add_argument("--detect-ip", action="store_true",
                         help="Print detected LAN IP and exit")
     args = parser.parse_args()
@@ -497,7 +510,7 @@ Examples:
         level=logging.WARNING if is_coord else logging.INFO,
     )
 
-    asyncio.run(run_node(config, args.id, node_only=args.node_only))
+    asyncio.run(run_node(config, args.id, node_only=args.node_only, recover=args.recover))
 
 
 if __name__ == "__main__":

@@ -340,20 +340,76 @@ class StorageNode:
             str(path): int(balance)
             for path, balance in archive_balances.items()
         }
-        log_event(
-            logger,
-            component=self._component,
-            event="state_restored",
-            balance=self._balance,
-            archived_snapshots=len(self._archive_balances),
-        )
+
+        # Restore block data from latest archive if available
+        latest_archive = state.get("latest_archive_path")
+        latest_ts = state.get("latest_snapshot_ts", 0)
+        if latest_archive and os.path.isfile(latest_archive):
+            self._restore_blocks_from_archive(latest_archive)
+            log_event(
+                logger,
+                component=self._component,
+                event="recovered_from_snapshot",
+                snapshot_ts=latest_ts,
+                archive=latest_archive,
+                balance=self._balance,
+            )
+        else:
+            log_event(
+                logger,
+                component=self._component,
+                event="state_restored",
+                balance=self._balance,
+                archived_snapshots=len(self._archive_balances),
+            )
+
+    def _restore_blocks_from_archive(self, archive_path: str):
+        """Restore block store data from a committed archive.
+
+        For C++ block stores (CppBlockStoreAdapter): copies the archive file
+        to the base image path, then reinitializes the block store so it opens
+        the restored data.
+        For MockBlockStore: loads blocks from the in-memory archive dict.
+        """
+        import shutil
+        if hasattr(self.block_store, 'base_path'):
+            # CppBlockStoreAdapter: copy archive → base, reinitialize
+            base_path = self.block_store.base_path
+            shutil.copy2(archive_path, base_path)
+            # Reinitialize so the C++ backend opens the restored file
+            if hasattr(self.block_store, '_reinitialize'):
+                self.block_store._reinitialize()
+        elif hasattr(self.block_store, '_blocks'):
+            # MockBlockStore: load blocks from archive dict
+            archived = self.block_store.get_archived_blocks(archive_path)
+            if archived:
+                self.block_store._blocks = dict(archived)
+        else:
+            logger.warning(
+                "Node %d: cannot restore blocks — unknown block store type",
+                self.node_id,
+            )
 
     def _persist_runtime_state(self):
         """Persist the mutable token/accounting state needed after restart."""
         os.makedirs(self.archive_dir, exist_ok=True)
+        # Find the latest archive path for recovery
+        latest_archive = None
+        latest_ts = 0
+        for path, bal in self._archive_balances.items():
+            # Extract timestamp from path: node{id}_snap_{ts}
+            try:
+                ts = int(path.rsplit("_", 1)[-1])
+                if ts > latest_ts:
+                    latest_ts = ts
+                    latest_archive = path
+            except (ValueError, IndexError):
+                pass
         state = {
             "balance": self._balance,
             "archive_balances": self._archive_balances,
+            "latest_archive_path": latest_archive,
+            "latest_snapshot_ts": latest_ts,
         }
         tmp_path = f"{self._state_path}.tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
