@@ -119,14 +119,17 @@ async def wait_for_nodes(node_configs: list[dict], timeout: float = 60.0):
 
 async def reset_nodes(node_configs: list[dict], balances: list[int]):
     for cfg in node_configs:
-        conn = NodeConnection(
-            node_id=cfg["node_id"], host=cfg["host"], port=cfg["port"],
-        )
-        await conn.connect()
-        await conn.send_and_receive(
-            MessageType.RESET, 0, balance=balances[cfg["node_id"]],
-        )
-        await conn.close()
+        try:
+            conn = NodeConnection(
+                node_id=cfg["node_id"], host=cfg["host"], port=cfg["port"],
+            )
+            await conn.connect()
+            await conn.send_and_receive(
+                MessageType.RESET, 0, balance=balances[cfg["node_id"]],
+            )
+            await conn.close()
+        except (ConnectionRefusedError, OSError, asyncio.TimeoutError):
+            print(f"  Warning: Node {cfg['node_id']} unreachable during reset (skipping)")
 
 
 async def run_strategy(
@@ -454,9 +457,15 @@ async def run_node(config: dict, node_id: int, node_only: bool = False, recover:
         print("(Press Ctrl+C to stop)\n")
 
         stop_event = asyncio.Event()
+        _stop_count = 0
 
         def _request_stop():
+            nonlocal _stop_count
+            _stop_count += 1
             stop_event.set()
+            if _stop_count >= 2:
+                # Force exit on double Ctrl+C
+                os._exit(0)
 
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -468,8 +477,15 @@ async def run_node(config: dict, node_id: int, node_only: bool = False, recover:
         try:
             await stop_event.wait()
         finally:
-            await workload.stop()
-            await node.stop()
+            print("\nShutting down...")
+            try:
+                await asyncio.wait_for(workload.stop(), timeout=3.0)
+            except asyncio.TimeoutError:
+                pass
+            try:
+                await asyncio.wait_for(node.stop(), timeout=3.0)
+            except asyncio.TimeoutError:
+                pass
 
 
 def main():
