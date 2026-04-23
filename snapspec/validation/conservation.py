@@ -105,7 +105,10 @@ def validate_conservation(
             continue
 
         post_roles = tag_to_post_roles.get(tag, set())
-        if "CAUSE" in post_roles or "EFFECT" in post_roles:
+        # Only skip if EFFECT is in the log — that means the credit landed.
+        # If only CAUSE is in the log but the transfer is still pending,
+        # the tokens are in-transit (destination node may be down).
+        if "EFFECT" in post_roles:
             continue
 
         amount = int(pending.get("amount", transfer_amounts.get(tag, 0)))
