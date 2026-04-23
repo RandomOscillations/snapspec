@@ -44,9 +44,7 @@ from snapspec.workload.node_workload import NodeWorkload
 
 logger = logging.getLogger(__name__)
 
-# Demo-safe default for `strategies: all`. Speculative remains available via
-# `--strategy speculative`, but is not part of the default live demo path.
-STRATEGIES = ["pause_and_snap", "two_phase"]
+STRATEGIES = ["pause_and_snap", "two_phase", "speculative"]
 
 
 def load_config(path: str) -> dict:
@@ -253,7 +251,7 @@ async def run_strategy(
     try:
         await asyncio.wait_for(
             coordinator.stop(),
-            timeout=coordinator.shutdown_timeout_s + coordinator.operation_timeout_s + 1,
+            timeout=5.0,
         )
     except asyncio.TimeoutError:
         print(f"\n  WARNING: {strategy_name} coordinator cleanup timed out.")
