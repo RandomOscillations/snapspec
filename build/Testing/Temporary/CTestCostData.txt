@@ -1,19 +1,18 @@
-ROWBlockStoreTest.BasicWriteRead 6 0.0016283
-ROWBlockStoreTest.SnapshotReadRouting 6 0.0019333
-ROWBlockStoreTest.DiscardMergesCorrectly 6 0.00149895
-ROWBlockStoreTest.CommitArchives 6 0.0015906
-ROWBlockStoreTest.StressDiscard 6 0.0562611
-ROWBlockStoreTest.WriteLogEntries 4 0
-ROWBlockStoreTest.DoubleSnapshotAsserts 6 0.000832632
-COWBlockStoreTest.BasicWriteRead 6 0.00135606
-COWBlockStoreTest.COWPreservesOldDataInSnapshot 6 0.00158792
-COWBlockStoreTest.DiscardDeletesSnapshotFile 6 0.000720715
-COWBlockStoreTest.CommitCreatesCompleteArchive 6 0.00296189
-COWBlockStoreTest.StressDiscard 6 0.0579678
-FullCopyBlockStoreTest.BasicWriteRead 6 0.00136174
-FullCopyBlockStoreTest.SnapshotIsFullCopy 6 0.00239108
-FullCopyBlockStoreTest.CommitMovesToArchive 6 0.00214839
-FullCopyBlockStoreTest.DiscardDeletesSnapshot 6 0.000747104
-FullCopyBlockStoreTest.StressDiscard 6 0.0558638
+ROWBlockStoreTest.BasicWriteRead 7 0.00302365
+ROWBlockStoreTest.SnapshotReadRouting 7 0.00253644
+ROWBlockStoreTest.DiscardMergesCorrectly 7 0.00199409
+ROWBlockStoreTest.CommitArchives 7 0.00249311
+ROWBlockStoreTest.StressDiscard 7 0.0775586
+ROWBlockStoreTest.WriteLogEntries 5 0.00167745
+ROWBlockStoreTest.DoubleSnapshotAsserts 7 0.00460052
+COWBlockStoreTest.BasicWriteRead 7 0.00193369
+COWBlockStoreTest.COWPreservesOldDataInSnapshot 7 0.0026347
+COWBlockStoreTest.DiscardDeletesSnapshotFile 7 0.0011828
+COWBlockStoreTest.CommitCreatesCompleteArchive 7 0.00469575
+COWBlockStoreTest.StressDiscard 7 0.0813769
+FullCopyBlockStoreTest.BasicWriteRead 7 0.00197758
+FullCopyBlockStoreTest.SnapshotIsFullCopy 7 0.00351335
+FullCopyBlockStoreTest.CommitMovesToArchive 7 0.00318439
+FullCopyBlockStoreTest.DiscardDeletesSnapshot 7 0.00123328
+FullCopyBlockStoreTest.StressDiscard 7 0.0781012
 ---
-ROWBlockStoreTest.WriteLogEntries

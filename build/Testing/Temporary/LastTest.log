@@ -1,10 +1,10 @@
-Start testing: Apr 21 00:12 EDT
+Start testing: Apr 23 10:33 EDT
 ----------------------------------------------------------
 1/17 Testing: ROWBlockStoreTest.BasicWriteRead
 1/17 Test: ROWBlockStoreTest.BasicWriteRead
 Command: "/Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/blockstore_tests" "--gtest_filter=ROWBlockStoreTest.BasicWriteRead" "--gtest_also_run_disabled_tests"
 Directory: /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build
-"ROWBlockStoreTest.BasicWriteRead" start time: Apr 21 00:12 EDT
+"ROWBlockStoreTest.BasicWriteRead" start time: Apr 23 10:33 EDT
 Output:
 ----------------------------------------------------------
 Running main() from /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/_deps/googletest-src/googletest/src/gtest_main.cc
@@ -13,17 +13,17 @@ Note: Google Test filter = ROWBlockStoreTest.BasicWriteRead
 [----------] Global test environment set-up.
 [----------] 1 test from ROWBlockStoreTest
 [ RUN      ] ROWBlockStoreTest.BasicWriteRead
-[       OK ] ROWBlockStoreTest.BasicWriteRead (5 ms)
-[----------] 1 test from ROWBlockStoreTest (5 ms total)
+[       OK ] ROWBlockStoreTest.BasicWriteRead (7 ms)
+[----------] 1 test from ROWBlockStoreTest (7 ms total)
 
 [----------] Global test environment tear-down
-[==========] 1 test from 1 test suite ran. (5 ms total)
+[==========] 1 test from 1 test suite ran. (7 ms total)
 [  PASSED  ] 1 test.
 <end of output>
-Test time =   0.01 sec
+Test time =   0.02 sec
 ----------------------------------------------------------
 Test Passed.
-"ROWBlockStoreTest.BasicWriteRead" end time: Apr 21 00:12 EDT
+"ROWBlockStoreTest.BasicWriteRead" end time: Apr 23 10:33 EDT
 "ROWBlockStoreTest.BasicWriteRead" time elapsed: 00:00:00
 ----------------------------------------------------------
 
@@ -31,7 +31,7 @@ Test Passed.
 2/17 Test: ROWBlockStoreTest.SnapshotReadRouting
 Command: "/Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/blockstore_tests" "--gtest_filter=ROWBlockStoreTest.SnapshotReadRouting" "--gtest_also_run_disabled_tests"
 Directory: /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build
-"ROWBlockStoreTest.SnapshotReadRouting" start time: Apr 21 00:12 EDT
+"ROWBlockStoreTest.SnapshotReadRouting" start time: Apr 23 10:33 EDT
 Output:
 ----------------------------------------------------------
 Running main() from /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/_deps/googletest-src/googletest/src/gtest_main.cc
@@ -40,17 +40,17 @@ Note: Google Test filter = ROWBlockStoreTest.SnapshotReadRouting
 [----------] Global test environment set-up.
 [----------] 1 test from ROWBlockStoreTest
 [ RUN      ] ROWBlockStoreTest.SnapshotReadRouting
-[       OK ] ROWBlockStoreTest.SnapshotReadRouting (7 ms)
-[----------] 1 test from ROWBlockStoreTest (7 ms total)
+[       OK ] ROWBlockStoreTest.SnapshotReadRouting (12 ms)
+[----------] 1 test from ROWBlockStoreTest (12 ms total)
 
 [----------] Global test environment tear-down
-[==========] 1 test from 1 test suite ran. (7 ms total)
+[==========] 1 test from 1 test suite ran. (12 ms total)
 [  PASSED  ] 1 test.
 <end of output>
-Test time =   0.01 sec
+Test time =   0.02 sec
 ----------------------------------------------------------
 Test Passed.
-"ROWBlockStoreTest.SnapshotReadRouting" end time: Apr 21 00:12 EDT
+"ROWBlockStoreTest.SnapshotReadRouting" end time: Apr 23 10:33 EDT
 "ROWBlockStoreTest.SnapshotReadRouting" time elapsed: 00:00:00
 ----------------------------------------------------------
 
@@ -58,7 +58,7 @@ Test Passed.
 3/17 Test: ROWBlockStoreTest.DiscardMergesCorrectly
 Command: "/Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/blockstore_tests" "--gtest_filter=ROWBlockStoreTest.DiscardMergesCorrectly" "--gtest_also_run_disabled_tests"
 Directory: /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build
-"ROWBlockStoreTest.DiscardMergesCorrectly" start time: Apr 21 00:12 EDT
+"ROWBlockStoreTest.DiscardMergesCorrectly" start time: Apr 23 10:33 EDT
 Output:
 ----------------------------------------------------------
 Running main() from /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/_deps/googletest-src/googletest/src/gtest_main.cc
@@ -67,17 +67,17 @@ Note: Google Test filter = ROWBlockStoreTest.DiscardMergesCorrectly
 [----------] Global test environment set-up.
 [----------] 1 test from ROWBlockStoreTest
 [ RUN      ] ROWBlockStoreTest.DiscardMergesCorrectly
-[       OK ] ROWBlockStoreTest.DiscardMergesCorrectly (5 ms)
-[----------] 1 test from ROWBlockStoreTest (5 ms total)
+[       OK ] ROWBlockStoreTest.DiscardMergesCorrectly (8 ms)
+[----------] 1 test from ROWBlockStoreTest (8 ms total)
 
 [----------] Global test environment tear-down
-[==========] 1 test from 1 test suite ran. (5 ms total)
+[==========] 1 test from 1 test suite ran. (8 ms total)
 [  PASSED  ] 1 test.
 <end of output>
 Test time =   0.01 sec
 ----------------------------------------------------------
 Test Passed.
-"ROWBlockStoreTest.DiscardMergesCorrectly" end time: Apr 21 00:12 EDT
+"ROWBlockStoreTest.DiscardMergesCorrectly" end time: Apr 23 10:33 EDT
 "ROWBlockStoreTest.DiscardMergesCorrectly" time elapsed: 00:00:00
 ----------------------------------------------------------
 
@@ -85,7 +85,7 @@ Test Passed.
 4/17 Test: ROWBlockStoreTest.CommitArchives
 Command: "/Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/blockstore_tests" "--gtest_filter=ROWBlockStoreTest.CommitArchives" "--gtest_also_run_disabled_tests"
 Directory: /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build
-"ROWBlockStoreTest.CommitArchives" start time: Apr 21 00:12 EDT
+"ROWBlockStoreTest.CommitArchives" start time: Apr 23 10:33 EDT
 Output:
 ----------------------------------------------------------
 Running main() from /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/_deps/googletest-src/googletest/src/gtest_main.cc
@@ -94,17 +94,17 @@ Note: Google Test filter = ROWBlockStoreTest.CommitArchives
 [----------] Global test environment set-up.
 [----------] 1 test from ROWBlockStoreTest
 [ RUN      ] ROWBlockStoreTest.CommitArchives
-[       OK ] ROWBlockStoreTest.CommitArchives (5 ms)
-[----------] 1 test from ROWBlockStoreTest (5 ms total)
+[       OK ] ROWBlockStoreTest.CommitArchives (11 ms)
+[----------] 1 test from ROWBlockStoreTest (11 ms total)
 
 [----------] Global test environment tear-down
-[==========] 1 test from 1 test suite ran. (5 ms total)
+[==========] 1 test from 1 test suite ran. (11 ms total)
 [  PASSED  ] 1 test.
 <end of output>
-Test time =   0.01 sec
+Test time =   0.02 sec
 ----------------------------------------------------------
 Test Passed.
-"ROWBlockStoreTest.CommitArchives" end time: Apr 21 00:12 EDT
+"ROWBlockStoreTest.CommitArchives" end time: Apr 23 10:33 EDT
 "ROWBlockStoreTest.CommitArchives" time elapsed: 00:00:00
 ----------------------------------------------------------
 
@@ -112,7 +112,7 @@ Test Passed.
 5/17 Test: ROWBlockStoreTest.StressDiscard
 Command: "/Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/blockstore_tests" "--gtest_filter=ROWBlockStoreTest.StressDiscard" "--gtest_also_run_disabled_tests"
 Directory: /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build
-"ROWBlockStoreTest.StressDiscard" start time: Apr 21 00:12 EDT
+"ROWBlockStoreTest.StressDiscard" start time: Apr 23 10:33 EDT
 Output:
 ----------------------------------------------------------
 Running main() from /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/_deps/googletest-src/googletest/src/gtest_main.cc
@@ -121,17 +121,17 @@ Note: Google Test filter = ROWBlockStoreTest.StressDiscard
 [----------] Global test environment set-up.
 [----------] 1 test from ROWBlockStoreTest
 [ RUN      ] ROWBlockStoreTest.StressDiscard
-[       OK ] ROWBlockStoreTest.StressDiscard (333 ms)
-[----------] 1 test from ROWBlockStoreTest (333 ms total)
+[       OK ] ROWBlockStoreTest.StressDiscard (536 ms)
+[----------] 1 test from ROWBlockStoreTest (536 ms total)
 
 [----------] Global test environment tear-down
-[==========] 1 test from 1 test suite ran. (333 ms total)
+[==========] 1 test from 1 test suite ran. (536 ms total)
 [  PASSED  ] 1 test.
 <end of output>
-Test time =   0.34 sec
+Test time =   0.54 sec
 ----------------------------------------------------------
 Test Passed.
-"ROWBlockStoreTest.StressDiscard" end time: Apr 21 00:12 EDT
+"ROWBlockStoreTest.StressDiscard" end time: Apr 23 10:33 EDT
 "ROWBlockStoreTest.StressDiscard" time elapsed: 00:00:00
 ----------------------------------------------------------
 
@@ -139,7 +139,7 @@ Test Passed.
 6/17 Test: ROWBlockStoreTest.WriteLogEntries
 Command: "/Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/blockstore_tests" "--gtest_filter=ROWBlockStoreTest.WriteLogEntries" "--gtest_also_run_disabled_tests"
 Directory: /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build
-"ROWBlockStoreTest.WriteLogEntries" start time: Apr 21 00:12 EDT
+"ROWBlockStoreTest.WriteLogEntries" start time: Apr 23 10:33 EDT
 Output:
 ----------------------------------------------------------
 Running main() from /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/_deps/googletest-src/googletest/src/gtest_main.cc
@@ -148,35 +148,17 @@ Note: Google Test filter = ROWBlockStoreTest.WriteLogEntries
 [----------] Global test environment set-up.
 [----------] 1 test from ROWBlockStoreTest
 [ RUN      ] ROWBlockStoreTest.WriteLogEntries
-/Users/adithyasrinivasan/Projects/snapspec-base/snapspec/src/tests/row_test.cpp:189: Failure
-Expected equality of these values:
-  log.size()
-    Which is: 4
-  2u
-    Which is: 2
-
-/Users/adithyasrinivasan/Projects/snapspec-base/snapspec/src/tests/row_test.cpp:190: Failure
-Expected equality of these values:
-  log[0].dependency_tag
-    Which is: 1001
-  1002u
-    Which is: 1002
-
-[  FAILED  ] ROWBlockStoreTest.WriteLogEntries (1 ms)
-[----------] 1 test from ROWBlockStoreTest (1 ms total)
+[       OK ] ROWBlockStoreTest.WriteLogEntries (2 ms)
+[----------] 1 test from ROWBlockStoreTest (2 ms total)
 
 [----------] Global test environment tear-down
-[==========] 1 test from 1 test suite ran. (1 ms total)
-[  PASSED  ] 0 tests.
-[  FAILED  ] 1 test, listed below:
-[  FAILED  ] ROWBlockStoreTest.WriteLogEntries
-
- 1 FAILED TEST
+[==========] 1 test from 1 test suite ran. (2 ms total)
+[  PASSED  ] 1 test.
 <end of output>
 Test time =   0.01 sec
 ----------------------------------------------------------
-Test Failed.
-"ROWBlockStoreTest.WriteLogEntries" end time: Apr 21 00:12 EDT
+Test Passed.
+"ROWBlockStoreTest.WriteLogEntries" end time: Apr 23 10:33 EDT
 "ROWBlockStoreTest.WriteLogEntries" time elapsed: 00:00:00
 ----------------------------------------------------------
 
@@ -184,7 +166,7 @@ Test Failed.
 7/17 Test: ROWBlockStoreTest.DoubleSnapshotAsserts
 Command: "/Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/blockstore_tests" "--gtest_filter=ROWBlockStoreTest.DoubleSnapshotAsserts" "--gtest_also_run_disabled_tests"
 Directory: /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build
-"ROWBlockStoreTest.DoubleSnapshotAsserts" start time: Apr 21 00:12 EDT
+"ROWBlockStoreTest.DoubleSnapshotAsserts" start time: Apr 23 10:33 EDT
 Output:
 ----------------------------------------------------------
 Running main() from /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/_deps/googletest-src/googletest/src/gtest_main.cc
@@ -193,17 +175,17 @@ Note: Google Test filter = ROWBlockStoreTest.DoubleSnapshotAsserts
 [----------] Global test environment set-up.
 [----------] 1 test from ROWBlockStoreTest
 [ RUN      ] ROWBlockStoreTest.DoubleSnapshotAsserts
-[       OK ] ROWBlockStoreTest.DoubleSnapshotAsserts (1 ms)
-[----------] 1 test from ROWBlockStoreTest (1 ms total)
+[       OK ] ROWBlockStoreTest.DoubleSnapshotAsserts (26 ms)
+[----------] 1 test from ROWBlockStoreTest (26 ms total)
 
 [----------] Global test environment tear-down
-[==========] 1 test from 1 test suite ran. (1 ms total)
+[==========] 1 test from 1 test suite ran. (26 ms total)
 [  PASSED  ] 1 test.
 <end of output>
-Test time =   0.00 sec
+Test time =   0.03 sec
 ----------------------------------------------------------
 Test Passed.
-"ROWBlockStoreTest.DoubleSnapshotAsserts" end time: Apr 21 00:12 EDT
+"ROWBlockStoreTest.DoubleSnapshotAsserts" end time: Apr 23 10:33 EDT
 "ROWBlockStoreTest.DoubleSnapshotAsserts" time elapsed: 00:00:00
 ----------------------------------------------------------
 
@@ -211,7 +193,7 @@ Test Passed.
 8/17 Test: COWBlockStoreTest.BasicWriteRead
 Command: "/Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/blockstore_tests" "--gtest_filter=COWBlockStoreTest.BasicWriteRead" "--gtest_also_run_disabled_tests"
 Directory: /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build
-"COWBlockStoreTest.BasicWriteRead" start time: Apr 21 00:12 EDT
+"COWBlockStoreTest.BasicWriteRead" start time: Apr 23 10:33 EDT
 Output:
 ----------------------------------------------------------
 Running main() from /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/_deps/googletest-src/googletest/src/gtest_main.cc
@@ -220,17 +202,17 @@ Note: Google Test filter = COWBlockStoreTest.BasicWriteRead
 [----------] Global test environment set-up.
 [----------] 1 test from COWBlockStoreTest
 [ RUN      ] COWBlockStoreTest.BasicWriteRead
-[       OK ] COWBlockStoreTest.BasicWriteRead (4 ms)
-[----------] 1 test from COWBlockStoreTest (4 ms total)
+[       OK ] COWBlockStoreTest.BasicWriteRead (7 ms)
+[----------] 1 test from COWBlockStoreTest (7 ms total)
 
 [----------] Global test environment tear-down
-[==========] 1 test from 1 test suite ran. (4 ms total)
+[==========] 1 test from 1 test suite ran. (7 ms total)
 [  PASSED  ] 1 test.
 <end of output>
 Test time =   0.01 sec
 ----------------------------------------------------------
 Test Passed.
-"COWBlockStoreTest.BasicWriteRead" end time: Apr 21 00:12 EDT
+"COWBlockStoreTest.BasicWriteRead" end time: Apr 23 10:33 EDT
 "COWBlockStoreTest.BasicWriteRead" time elapsed: 00:00:00
 ----------------------------------------------------------
 
@@ -238,7 +220,7 @@ Test Passed.
 9/17 Test: COWBlockStoreTest.COWPreservesOldDataInSnapshot
 Command: "/Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/blockstore_tests" "--gtest_filter=COWBlockStoreTest.COWPreservesOldDataInSnapshot" "--gtest_also_run_disabled_tests"
 Directory: /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build
-"COWBlockStoreTest.COWPreservesOldDataInSnapshot" start time: Apr 21 00:12 EDT
+"COWBlockStoreTest.COWPreservesOldDataInSnapshot" start time: Apr 23 10:33 EDT
 Output:
 ----------------------------------------------------------
 Running main() from /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/_deps/googletest-src/googletest/src/gtest_main.cc
@@ -247,17 +229,17 @@ Note: Google Test filter = COWBlockStoreTest.COWPreservesOldDataInSnapshot
 [----------] Global test environment set-up.
 [----------] 1 test from COWBlockStoreTest
 [ RUN      ] COWBlockStoreTest.COWPreservesOldDataInSnapshot
-[       OK ] COWBlockStoreTest.COWPreservesOldDataInSnapshot (6 ms)
-[----------] 1 test from COWBlockStoreTest (6 ms total)
+[       OK ] COWBlockStoreTest.COWPreservesOldDataInSnapshot (12 ms)
+[----------] 1 test from COWBlockStoreTest (12 ms total)
 
 [----------] Global test environment tear-down
-[==========] 1 test from 1 test suite ran. (6 ms total)
+[==========] 1 test from 1 test suite ran. (12 ms total)
 [  PASSED  ] 1 test.
 <end of output>
-Test time =   0.01 sec
+Test time =   0.02 sec
 ----------------------------------------------------------
 Test Passed.
-"COWBlockStoreTest.COWPreservesOldDataInSnapshot" end time: Apr 21 00:12 EDT
+"COWBlockStoreTest.COWPreservesOldDataInSnapshot" end time: Apr 23 10:33 EDT
 "COWBlockStoreTest.COWPreservesOldDataInSnapshot" time elapsed: 00:00:00
 ----------------------------------------------------------
 
@@ -265,7 +247,7 @@ Test Passed.
 10/17 Test: COWBlockStoreTest.DiscardDeletesSnapshotFile
 Command: "/Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/blockstore_tests" "--gtest_filter=COWBlockStoreTest.DiscardDeletesSnapshotFile" "--gtest_also_run_disabled_tests"
 Directory: /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build
-"COWBlockStoreTest.DiscardDeletesSnapshotFile" start time: Apr 21 00:12 EDT
+"COWBlockStoreTest.DiscardDeletesSnapshotFile" start time: Apr 23 10:33 EDT
 Output:
 ----------------------------------------------------------
 Running main() from /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/_deps/googletest-src/googletest/src/gtest_main.cc
@@ -274,17 +256,17 @@ Note: Google Test filter = COWBlockStoreTest.DiscardDeletesSnapshotFile
 [----------] Global test environment set-up.
 [----------] 1 test from COWBlockStoreTest
 [ RUN      ] COWBlockStoreTest.DiscardDeletesSnapshotFile
-[       OK ] COWBlockStoreTest.DiscardDeletesSnapshotFile (1 ms)
-[----------] 1 test from COWBlockStoreTest (1 ms total)
+[       OK ] COWBlockStoreTest.DiscardDeletesSnapshotFile (2 ms)
+[----------] 1 test from COWBlockStoreTest (2 ms total)
 
 [----------] Global test environment tear-down
-[==========] 1 test from 1 test suite ran. (1 ms total)
+[==========] 1 test from 1 test suite ran. (2 ms total)
 [  PASSED  ] 1 test.
 <end of output>
-Test time =   0.00 sec
+Test time =   0.01 sec
 ----------------------------------------------------------
 Test Passed.
-"COWBlockStoreTest.DiscardDeletesSnapshotFile" end time: Apr 21 00:12 EDT
+"COWBlockStoreTest.DiscardDeletesSnapshotFile" end time: Apr 23 10:33 EDT
 "COWBlockStoreTest.DiscardDeletesSnapshotFile" time elapsed: 00:00:00
 ----------------------------------------------------------
 
@@ -292,7 +274,7 @@ Test Passed.
 11/17 Test: COWBlockStoreTest.CommitCreatesCompleteArchive
 Command: "/Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/blockstore_tests" "--gtest_filter=COWBlockStoreTest.CommitCreatesCompleteArchive" "--gtest_also_run_disabled_tests"
 Directory: /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build
-"COWBlockStoreTest.CommitCreatesCompleteArchive" start time: Apr 21 00:12 EDT
+"COWBlockStoreTest.CommitCreatesCompleteArchive" start time: Apr 23 10:33 EDT
 Output:
 ----------------------------------------------------------
 Running main() from /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/_deps/googletest-src/googletest/src/gtest_main.cc
@@ -301,17 +283,17 @@ Note: Google Test filter = COWBlockStoreTest.CommitCreatesCompleteArchive
 [----------] Global test environment set-up.
 [----------] 1 test from COWBlockStoreTest
 [ RUN      ] COWBlockStoreTest.CommitCreatesCompleteArchive
-[       OK ] COWBlockStoreTest.CommitCreatesCompleteArchive (14 ms)
-[----------] 1 test from COWBlockStoreTest (14 ms total)
+[       OK ] COWBlockStoreTest.CommitCreatesCompleteArchive (26 ms)
+[----------] 1 test from COWBlockStoreTest (26 ms total)
 
 [----------] Global test environment tear-down
-[==========] 1 test from 1 test suite ran. (14 ms total)
+[==========] 1 test from 1 test suite ran. (27 ms total)
 [  PASSED  ] 1 test.
 <end of output>
-Test time =   0.02 sec
+Test time =   0.03 sec
 ----------------------------------------------------------
 Test Passed.
-"COWBlockStoreTest.CommitCreatesCompleteArchive" end time: Apr 21 00:12 EDT
+"COWBlockStoreTest.CommitCreatesCompleteArchive" end time: Apr 23 10:33 EDT
 "COWBlockStoreTest.CommitCreatesCompleteArchive" time elapsed: 00:00:00
 ----------------------------------------------------------
 
@@ -319,7 +301,7 @@ Test Passed.
 12/17 Test: COWBlockStoreTest.StressDiscard
 Command: "/Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/blockstore_tests" "--gtest_filter=COWBlockStoreTest.StressDiscard" "--gtest_also_run_disabled_tests"
 Directory: /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build
-"COWBlockStoreTest.StressDiscard" start time: Apr 21 00:12 EDT
+"COWBlockStoreTest.StressDiscard" start time: Apr 23 10:33 EDT
 Output:
 ----------------------------------------------------------
 Running main() from /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/_deps/googletest-src/googletest/src/gtest_main.cc
@@ -328,17 +310,17 @@ Note: Google Test filter = COWBlockStoreTest.StressDiscard
 [----------] Global test environment set-up.
 [----------] 1 test from COWBlockStoreTest
 [ RUN      ] COWBlockStoreTest.StressDiscard
-[       OK ] COWBlockStoreTest.StressDiscard (344 ms)
-[----------] 1 test from COWBlockStoreTest (344 ms total)
+[       OK ] COWBlockStoreTest.StressDiscard (563 ms)
+[----------] 1 test from COWBlockStoreTest (563 ms total)
 
 [----------] Global test environment tear-down
-[==========] 1 test from 1 test suite ran. (344 ms total)
+[==========] 1 test from 1 test suite ran. (563 ms total)
 [  PASSED  ] 1 test.
 <end of output>
-Test time =   0.35 sec
+Test time =   0.57 sec
 ----------------------------------------------------------
 Test Passed.
-"COWBlockStoreTest.StressDiscard" end time: Apr 21 00:12 EDT
+"COWBlockStoreTest.StressDiscard" end time: Apr 23 10:33 EDT
 "COWBlockStoreTest.StressDiscard" time elapsed: 00:00:00
 ----------------------------------------------------------
 
@@ -346,7 +328,7 @@ Test Passed.
 13/17 Test: FullCopyBlockStoreTest.BasicWriteRead
 Command: "/Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/blockstore_tests" "--gtest_filter=FullCopyBlockStoreTest.BasicWriteRead" "--gtest_also_run_disabled_tests"
 Directory: /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build
-"FullCopyBlockStoreTest.BasicWriteRead" start time: Apr 21 00:12 EDT
+"FullCopyBlockStoreTest.BasicWriteRead" start time: Apr 23 10:33 EDT
 Output:
 ----------------------------------------------------------
 Running main() from /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/_deps/googletest-src/googletest/src/gtest_main.cc
@@ -355,17 +337,17 @@ Note: Google Test filter = FullCopyBlockStoreTest.BasicWriteRead
 [----------] Global test environment set-up.
 [----------] 1 test from FullCopyBlockStoreTest
 [ RUN      ] FullCopyBlockStoreTest.BasicWriteRead
-[       OK ] FullCopyBlockStoreTest.BasicWriteRead (4 ms)
-[----------] 1 test from FullCopyBlockStoreTest (4 ms total)
+[       OK ] FullCopyBlockStoreTest.BasicWriteRead (7 ms)
+[----------] 1 test from FullCopyBlockStoreTest (7 ms total)
 
 [----------] Global test environment tear-down
-[==========] 1 test from 1 test suite ran. (4 ms total)
+[==========] 1 test from 1 test suite ran. (7 ms total)
 [  PASSED  ] 1 test.
 <end of output>
 Test time =   0.01 sec
 ----------------------------------------------------------
 Test Passed.
-"FullCopyBlockStoreTest.BasicWriteRead" end time: Apr 21 00:12 EDT
+"FullCopyBlockStoreTest.BasicWriteRead" end time: Apr 23 10:33 EDT
 "FullCopyBlockStoreTest.BasicWriteRead" time elapsed: 00:00:00
 ----------------------------------------------------------
 
@@ -373,7 +355,7 @@ Test Passed.
 14/17 Test: FullCopyBlockStoreTest.SnapshotIsFullCopy
 Command: "/Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/blockstore_tests" "--gtest_filter=FullCopyBlockStoreTest.SnapshotIsFullCopy" "--gtest_also_run_disabled_tests"
 Directory: /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build
-"FullCopyBlockStoreTest.SnapshotIsFullCopy" start time: Apr 21 00:12 EDT
+"FullCopyBlockStoreTest.SnapshotIsFullCopy" start time: Apr 23 10:33 EDT
 Output:
 ----------------------------------------------------------
 Running main() from /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/_deps/googletest-src/googletest/src/gtest_main.cc
@@ -382,17 +364,17 @@ Note: Google Test filter = FullCopyBlockStoreTest.SnapshotIsFullCopy
 [----------] Global test environment set-up.
 [----------] 1 test from FullCopyBlockStoreTest
 [ RUN      ] FullCopyBlockStoreTest.SnapshotIsFullCopy
-[       OK ] FullCopyBlockStoreTest.SnapshotIsFullCopy (11 ms)
-[----------] 1 test from FullCopyBlockStoreTest (11 ms total)
+[       OK ] FullCopyBlockStoreTest.SnapshotIsFullCopy (18 ms)
+[----------] 1 test from FullCopyBlockStoreTest (18 ms total)
 
 [----------] Global test environment tear-down
-[==========] 1 test from 1 test suite ran. (11 ms total)
+[==========] 1 test from 1 test suite ran. (18 ms total)
 [  PASSED  ] 1 test.
 <end of output>
-Test time =   0.01 sec
+Test time =   0.02 sec
 ----------------------------------------------------------
 Test Passed.
-"FullCopyBlockStoreTest.SnapshotIsFullCopy" end time: Apr 21 00:12 EDT
+"FullCopyBlockStoreTest.SnapshotIsFullCopy" end time: Apr 23 10:33 EDT
 "FullCopyBlockStoreTest.SnapshotIsFullCopy" time elapsed: 00:00:00
 ----------------------------------------------------------
 
@@ -400,7 +382,7 @@ Test Passed.
 15/17 Test: FullCopyBlockStoreTest.CommitMovesToArchive
 Command: "/Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/blockstore_tests" "--gtest_filter=FullCopyBlockStoreTest.CommitMovesToArchive" "--gtest_also_run_disabled_tests"
 Directory: /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build
-"FullCopyBlockStoreTest.CommitMovesToArchive" start time: Apr 21 00:12 EDT
+"FullCopyBlockStoreTest.CommitMovesToArchive" start time: Apr 23 10:33 EDT
 Output:
 ----------------------------------------------------------
 Running main() from /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/_deps/googletest-src/googletest/src/gtest_main.cc
@@ -409,17 +391,17 @@ Note: Google Test filter = FullCopyBlockStoreTest.CommitMovesToArchive
 [----------] Global test environment set-up.
 [----------] 1 test from FullCopyBlockStoreTest
 [ RUN      ] FullCopyBlockStoreTest.CommitMovesToArchive
-[       OK ] FullCopyBlockStoreTest.CommitMovesToArchive (9 ms)
-[----------] 1 test from FullCopyBlockStoreTest (9 ms total)
+[       OK ] FullCopyBlockStoreTest.CommitMovesToArchive (16 ms)
+[----------] 1 test from FullCopyBlockStoreTest (16 ms total)
 
 [----------] Global test environment tear-down
-[==========] 1 test from 1 test suite ran. (9 ms total)
+[==========] 1 test from 1 test suite ran. (16 ms total)
 [  PASSED  ] 1 test.
 <end of output>
-Test time =   0.01 sec
+Test time =   0.02 sec
 ----------------------------------------------------------
 Test Passed.
-"FullCopyBlockStoreTest.CommitMovesToArchive" end time: Apr 21 00:12 EDT
+"FullCopyBlockStoreTest.CommitMovesToArchive" end time: Apr 23 10:33 EDT
 "FullCopyBlockStoreTest.CommitMovesToArchive" time elapsed: 00:00:00
 ----------------------------------------------------------
 
@@ -427,7 +409,7 @@ Test Passed.
 16/17 Test: FullCopyBlockStoreTest.DiscardDeletesSnapshot
 Command: "/Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/blockstore_tests" "--gtest_filter=FullCopyBlockStoreTest.DiscardDeletesSnapshot" "--gtest_also_run_disabled_tests"
 Directory: /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build
-"FullCopyBlockStoreTest.DiscardDeletesSnapshot" start time: Apr 21 00:12 EDT
+"FullCopyBlockStoreTest.DiscardDeletesSnapshot" start time: Apr 23 10:33 EDT
 Output:
 ----------------------------------------------------------
 Running main() from /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/_deps/googletest-src/googletest/src/gtest_main.cc
@@ -436,17 +418,17 @@ Note: Google Test filter = FullCopyBlockStoreTest.DiscardDeletesSnapshot
 [----------] Global test environment set-up.
 [----------] 1 test from FullCopyBlockStoreTest
 [ RUN      ] FullCopyBlockStoreTest.DiscardDeletesSnapshot
-[       OK ] FullCopyBlockStoreTest.DiscardDeletesSnapshot (1 ms)
-[----------] 1 test from FullCopyBlockStoreTest (1 ms total)
+[       OK ] FullCopyBlockStoreTest.DiscardDeletesSnapshot (2 ms)
+[----------] 1 test from FullCopyBlockStoreTest (2 ms total)
 
 [----------] Global test environment tear-down
-[==========] 1 test from 1 test suite ran. (1 ms total)
+[==========] 1 test from 1 test suite ran. (2 ms total)
 [  PASSED  ] 1 test.
 <end of output>
-Test time =   0.00 sec
+Test time =   0.01 sec
 ----------------------------------------------------------
 Test Passed.
-"FullCopyBlockStoreTest.DiscardDeletesSnapshot" end time: Apr 21 00:12 EDT
+"FullCopyBlockStoreTest.DiscardDeletesSnapshot" end time: Apr 23 10:33 EDT
 "FullCopyBlockStoreTest.DiscardDeletesSnapshot" time elapsed: 00:00:00
 ----------------------------------------------------------
 
@@ -454,7 +436,7 @@ Test Passed.
 17/17 Test: FullCopyBlockStoreTest.StressDiscard
 Command: "/Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/blockstore_tests" "--gtest_filter=FullCopyBlockStoreTest.StressDiscard" "--gtest_also_run_disabled_tests"
 Directory: /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build
-"FullCopyBlockStoreTest.StressDiscard" start time: Apr 21 00:12 EDT
+"FullCopyBlockStoreTest.StressDiscard" start time: Apr 23 10:33 EDT
 Output:
 ----------------------------------------------------------
 Running main() from /Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/_deps/googletest-src/googletest/src/gtest_main.cc
@@ -463,18 +445,18 @@ Note: Google Test filter = FullCopyBlockStoreTest.StressDiscard
 [----------] Global test environment set-up.
 [----------] 1 test from FullCopyBlockStoreTest
 [ RUN      ] FullCopyBlockStoreTest.StressDiscard
-[       OK ] FullCopyBlockStoreTest.StressDiscard (332 ms)
-[----------] 1 test from FullCopyBlockStoreTest (332 ms total)
+[       OK ] FullCopyBlockStoreTest.StressDiscard (540 ms)
+[----------] 1 test from FullCopyBlockStoreTest (540 ms total)
 
 [----------] Global test environment tear-down
-[==========] 1 test from 1 test suite ran. (332 ms total)
+[==========] 1 test from 1 test suite ran. (540 ms total)
 [  PASSED  ] 1 test.
 <end of output>
-Test time =   0.34 sec
+Test time =   0.55 sec
 ----------------------------------------------------------
 Test Passed.
-"FullCopyBlockStoreTest.StressDiscard" end time: Apr 21 00:12 EDT
+"FullCopyBlockStoreTest.StressDiscard" end time: Apr 23 10:33 EDT
 "FullCopyBlockStoreTest.StressDiscard" time elapsed: 00:00:00
 ----------------------------------------------------------
 
-End testing: Apr 21 00:12 EDT
+End testing: Apr 23 10:33 EDT

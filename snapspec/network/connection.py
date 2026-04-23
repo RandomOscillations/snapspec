@@ -25,9 +25,9 @@ class NodeConnection:
     port: int
     reader: asyncio.StreamReader | None = None
     writer: asyncio.StreamWriter | None = None
-    max_reconnect_attempts: int = 4
+    max_reconnect_attempts: int = 2
     reconnect_backoff_base_s: float = 0.1
-    reconnect_backoff_max_s: float = 5.0
+    reconnect_backoff_max_s: float = 0.5
     state: str = field(default="disconnected", init=False)
     _io_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
