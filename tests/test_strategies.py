@@ -29,6 +29,7 @@ class MockCoordinator:
     _write_logs: list[list[dict]] = field(default_factory=list)
     _snapshot_balances: list[int] = field(default_factory=list)
     _call_log: list[tuple[str, int]] = field(default_factory=list)
+    connections: dict = field(default_factory=lambda: {0: None, 1: None, 2: None})
 
     def tick(self) -> int:
         self._clock += 1

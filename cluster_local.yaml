@@ -15,15 +15,15 @@ nodes:
 coordinator_node: 0
 
 workload:
-  write_rate: 20
+  write_rate: 100
   cross_node_ratio: 0.2
-  total_tokens: 30000
+  total_tokens: 100000
   block_size: 64
   total_blocks: 32
 
 experiment:
-  duration_s: 5
-  snapshot_interval_s: 1.0
+  duration_s: 60
+  snapshot_interval_s: 2.0
   strategies: "all"
   output_dir: "results/local_demo"
 

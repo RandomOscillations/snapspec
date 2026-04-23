@@ -253,7 +253,13 @@ class NodeWorkload:
         """Debit locally, persist the pending credit, then replay it."""
         self._transfer_idle.clear()
         try:
-            dest_id = self._rng.choice(list(self._remote_conns.keys()))
+            # Skip destinations with pending unresolved transfers (likely dead)
+            dead_dests = {p.dest for p in self._pending_effects.values() if p.attempts >= 2}
+            available = [nid for nid in self._remote_conns if nid not in dead_dests]
+            if not available:
+                self._transfer_idle.set()
+                return 0
+            dest_id = self._rng.choice(available)
             max_amount = max(1, self._local_balance // 10)
             amount = self._rng.randint(1, max_amount)
 

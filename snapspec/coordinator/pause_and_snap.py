@@ -110,7 +110,8 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     conservation_ok: bool | None = None
     balance_sum: int | None = None
     in_transit_total: int | None = None
-    if coordinator.expected_total > 0:
+    all_nodes_present = len(responding_node_ids) == len(coordinator.connections)
+    if coordinator.expected_total > 0 and all_nodes_present:
         adjusted_expected_total = coordinator.expected_total_for_participants(
             responding_node_ids
         )
