@@ -346,6 +346,12 @@ class StorageNode:
         latest_ts = state.get("latest_snapshot_ts", 0)
         if latest_archive and os.path.isfile(latest_archive):
             self._restore_blocks_from_archive(latest_archive)
+            # Use the snapshot-time balance, not the live balance at commit time.
+            # The archive contains blocks from snapshot creation, so the balance
+            # must match that point in time — not the drifted post-snapshot value.
+            archive_balance = self._archive_balances.get(latest_archive)
+            if archive_balance is not None:
+                self._balance = archive_balance
             log_event(
                 logger,
                 component=self._component,
@@ -415,6 +421,16 @@ class StorageNode:
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(state, f)
         os.replace(tmp_path, self._state_path)
+
+    def latest_snapshot_ts(self) -> int | None:
+        """Return the newest committed snapshot timestamp known to this node."""
+        latest_ts = 0
+        for path in self._archive_balances:
+            try:
+                latest_ts = max(latest_ts, int(path.rsplit("_", 1)[-1]))
+            except (ValueError, IndexError):
+                continue
+        return latest_ts or None
 
     async def _handle_connection(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -944,6 +960,82 @@ class StorageNode:
                          balance_match=balance_match,
                          snapshot_balance=snapshot_balance)
 
+    async def _handle_restore_snapshot(self, msg: dict, writer: asyncio.StreamWriter):
+        """Restore this node to a committed local archive for a global rollback."""
+        ts = msg["logical_timestamp"]
+        snapshot_ts = msg.get("snapshot_ts")
+        if snapshot_ts is None:
+            await self._send_error(writer, msg, "RESTORE_SNAPSHOT requires snapshot_ts")
+            return
+
+        archive_path = f"{self.archive_dir}/node{self.node_id}_snap_{snapshot_ts}"
+        restored = False
+        paused = False
+
+        try:
+            if self._local_workload is not None:
+                await self._local_workload.drain()
+
+            async with self._state_lock:
+                self._writes_paused = True
+                paused = True
+
+                if not os.path.isfile(archive_path):
+                    await self._send_error(
+                        writer, msg, f"No archive found at {archive_path}"
+                    )
+                    return
+
+                archive_balance = self._archive_balances.get(archive_path)
+                if archive_balance is None:
+                    await self._send_error(
+                        writer, msg,
+                        f"No archived balance recorded for {archive_path}",
+                    )
+                    return
+
+                if self.block_store.is_snapshot_active():
+                    delta_count = self.block_store.discard_snapshot()
+                    self.delta_blocks_at_discard.append(delta_count)
+
+                self._restore_blocks_from_archive(archive_path)
+                self._balance = archive_balance
+                self.state = NodeState.IDLE
+                self.snapshot_ts = 0
+                self._snapshot_balance = None
+                self.writes_during_snapshot = 0
+                self.delta_blocks_at_discard = []
+                self._snapshot_ground_truth = {}
+                self._persist_runtime_state()
+                restored = True
+
+            if self._local_workload is not None:
+                await self._local_workload.clear_pending_effects()
+                self._local_workload.set_local_balance(self._balance)
+
+        finally:
+            if paused:
+                async with self._state_lock:
+                    self._writes_paused = False
+                if self._local_workload is not None:
+                    self._local_workload.resume_transfers()
+
+        log_event(
+            logger,
+            component=self._component,
+            event="snapshot_restored",
+            snapshot_ts=snapshot_ts,
+            archive=archive_path,
+            balance=self._balance,
+        )
+        await self._send(
+            writer,
+            MessageType.SNAPSHOT_RESTORED,
+            ts,
+            snapshot_ts=snapshot_ts,
+            balance=self._balance,
+        )
+
     async def _handle_shutdown(self, msg: dict, writer: asyncio.StreamWriter):
         ts = msg["logical_timestamp"]
 
@@ -975,10 +1067,9 @@ class StorageNode:
         MessageType.GET_WRITE_LOG.value: _handle_get_write_log,
         MessageType.GET_SNAPSHOT_STATE.value: _handle_get_snapshot_state,
         MessageType.VERIFY_SNAPSHOT_RESTORE.value: _handle_verify_snapshot_restore,
+        MessageType.RESTORE_SNAPSHOT.value: _handle_restore_snapshot,
         MessageType.DRAIN_WORKLOAD.value: _handle_drain_workload,
         MessageType.RESUME_WORKLOAD.value: _handle_resume_workload,
         MessageType.RESET.value: _handle_reset,
         MessageType.SHUTDOWN.value: _handle_shutdown,
     }
-
-

@@ -208,6 +208,21 @@ class NodeWorkload:
         """Re-enable cross-node transfers."""
         self._draining = False
 
+    def set_local_balance(self, balance: int):
+        """Reset the workload's source-balance estimate after node restore."""
+        self._local_balance = balance
+
+    async def clear_pending_effects(self):
+        """Drop source-owned pending effects after a coordinated global rollback.
+
+        A global restore moves every node back to a committed snapshot boundary,
+        so pending effects created after that boundary belong to the discarded
+        future and must not be replayed.
+        """
+        self._pending_effects.clear()
+        if self._pending_outbox is not None:
+            await self._pending_outbox.clear_pending(self._outbox_run_id)
+
     async def _connect_with_retry(self, conn: NodeConnection):
         for attempt in range(5):
             try:

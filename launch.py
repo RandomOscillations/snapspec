@@ -38,6 +38,7 @@ from snapspec.logging_utils import configure_logging
 from snapspec.metrics.collector import MetricsCollector
 from snapspec.network.connection import NodeConnection
 from snapspec.network.protocol import MessageType
+from snapspec.metadata.outbox import PendingTransferOutbox
 from snapspec.node.server import StorageNode, MockBlockStore
 from snapspec.workload.node_workload import NodeWorkload
 
@@ -132,6 +133,42 @@ async def reset_nodes(node_configs: list[dict], balances: list[int]):
             print(f"  Warning: Node {cfg['node_id']} unreachable during reset (skipping)")
 
 
+async def restore_global_snapshot(node_configs: list[dict], snapshot_ts: int) -> bool:
+    """Restore all reachable nodes to the same committed snapshot timestamp."""
+    ok = True
+    for cfg in node_configs:
+        conn = NodeConnection(
+            node_id=cfg["node_id"], host=cfg["host"], port=cfg["port"],
+        )
+        try:
+            await conn.connect()
+            resp = await conn.send_and_receive(
+                MessageType.RESTORE_SNAPSHOT,
+                0,
+                snapshot_ts=snapshot_ts,
+            )
+            if resp is None or resp.get("type") != MessageType.SNAPSHOT_RESTORED.value:
+                ok = False
+                print(f"  Restore failed on node {cfg['node_id']}: {resp}")
+            else:
+                print(
+                    f"  Node {cfg['node_id']} restored to snapshot {snapshot_ts} "
+                    f"(balance={resp.get('balance')})"
+                )
+        except (ConnectionRefusedError, OSError, asyncio.TimeoutError) as exc:
+            ok = False
+            print(f"  Restore failed on node {cfg['node_id']}: {exc}")
+        finally:
+            await conn.close()
+    return ok
+
+
+async def clear_local_pending_outbox(outbox_path: str, run_id: str) -> None:
+    outbox = PendingTransferOutbox.for_sqlite(outbox_path)
+    await outbox.clear_pending(run_id)
+    await outbox.close()
+
+
 async def run_strategy(
     strategy_name: str,
     node_configs: list[dict],
@@ -156,7 +193,9 @@ async def run_strategy(
         snapshot_interval_s=exp_cfg["snapshot_interval_s"],
         on_snapshot_complete=metrics.on_snapshot_complete,
         total_blocks_per_node=wl_cfg["total_blocks"],
-        health_check_interval_s=9999,
+        health_check_interval_s=1.0,
+        health_check_timeout_s=0.5,
+        health_unhealthy_after_s=3.0,
         status_interval_s=5.0,
     )
     coordinator.expected_total = total_tokens
@@ -259,6 +298,10 @@ async def run_node(config: dict, node_id: int, node_only: bool = False,
                 shutil.rmtree(d)
         os.makedirs(archive_dir, exist_ok=True)
 
+    # Outbox for durable pending transfers (survives restarts)
+    outbox_path = os.path.join(archive_dir, f"node{node_id}_outbox.db")
+    outbox_run_id = f"node-{node_id}"
+
     # Build block store
     block_store = build_block_store(bs_type, node_id, block_size, total_blocks)
 
@@ -307,40 +350,44 @@ async def run_node(config: dict, node_id: int, node_only: bool = False,
     await wait_for_nodes(node_configs)
     print("All nodes ready.\n")
 
+    if recover:
+        snapshot_ts = node.latest_snapshot_ts()
+        if snapshot_ts is None:
+            print("  Recovery requested, but this node has no committed snapshot archive.")
+        else:
+            print(f"  Restoring all nodes to global snapshot {snapshot_ts}...")
+            restored = await restore_global_snapshot(node_configs, snapshot_ts)
+            await clear_local_pending_outbox(outbox_path, outbox_run_id)
+            if not restored:
+                print("  WARNING: global restore did not complete on every node.")
+
+    def _make_workload(balance: int) -> NodeWorkload:
+        outbox = PendingTransferOutbox.for_sqlite(outbox_path)
+        return NodeWorkload(
+            node_id=node_id,
+            local_port=actual_port,
+            remote_nodes=remote_nodes,
+            write_rate=wl_cfg.get("write_rate", 200),
+            cross_node_ratio=wl_cfg.get("cross_node_ratio", 0.2),
+            initial_balance=balance,
+            total_tokens=total_tokens,
+            num_nodes=num_nodes,
+            block_size=block_size,
+            total_blocks=total_blocks,
+            pending_outbox=outbox,
+            outbox_run_id=outbox_run_id,
+        )
+
     if is_coordinator:
         # Reset all nodes
         balances = [per_node] * num_nodes
         balances[0] += total_tokens - per_node * num_nodes
         print(f"Resetting all nodes (balance per node: {per_node})...")
         await reset_nodes(node_configs, balances)
-
-        workload = NodeWorkload(
-            node_id=node_id,
-            local_port=actual_port,
-            remote_nodes=remote_nodes,
-            write_rate=wl_cfg.get("write_rate", 200),
-            cross_node_ratio=wl_cfg.get("cross_node_ratio", 0.2),
-            initial_balance=balances[node_id],
-            total_tokens=total_tokens,
-            num_nodes=num_nodes,
-            block_size=block_size,
-            total_blocks=total_blocks,
-        )
+        workload = _make_workload(balances[node_id])
     else:
-        # In recovery mode, use the node's restored balance
         wl_balance = node._balance if recover else per_node
-        workload = NodeWorkload(
-            node_id=node_id,
-            local_port=actual_port,
-            remote_nodes=remote_nodes,
-            write_rate=wl_cfg.get("write_rate", 200),
-            cross_node_ratio=wl_cfg.get("cross_node_ratio", 0.2),
-            initial_balance=wl_balance,
-            total_tokens=total_tokens,
-            num_nodes=num_nodes,
-            block_size=block_size,
-            total_blocks=total_blocks,
-        )
+        workload = _make_workload(wl_balance)
 
     node.set_transfer_amounts(workload._transfer_amounts)
     node.set_workload(workload)
@@ -373,18 +420,7 @@ async def run_node(config: dict, node_id: int, node_only: bool = False,
                 await reset_nodes(node_configs, balances)
                 # Restart workload after reset
                 await workload.stop()
-                workload = NodeWorkload(
-                    node_id=node_id,
-                    local_port=actual_port,
-                    remote_nodes=remote_nodes,
-                    write_rate=wl_cfg.get("write_rate", 200),
-                    cross_node_ratio=wl_cfg.get("cross_node_ratio", 0.2),
-                    initial_balance=balances[node_id],
-                    total_tokens=total_tokens,
-                    num_nodes=num_nodes,
-                    block_size=block_size,
-                    total_blocks=total_blocks,
-                )
+                workload = _make_workload(balances[node_id])
                 node.set_transfer_amounts(workload._transfer_amounts)
                 node.set_workload(workload)
                 await workload.start()

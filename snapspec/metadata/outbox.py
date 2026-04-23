@@ -113,6 +113,15 @@ class PendingTransferOutbox:
             else:
                 await asyncio.to_thread(self._mark_applied_sqlite, run_id, dep_tag)
 
+    async def clear_pending(self, run_id: str):
+        """Discard pending effects for a run after rolling back to a global snapshot."""
+        await self.start()
+        async with self._lock:
+            if self._mysql_pool is not None:
+                await self._clear_pending_mysql(run_id)
+            else:
+                await asyncio.to_thread(self._clear_pending_sqlite, run_id)
+
     async def register_run(self, run_id: str):
         """Record the most recent outbox run id for crash-restart recovery."""
         await self.start()
@@ -242,6 +251,19 @@ class PendingTransferOutbox:
         )
         self._sqlite_conn.commit()
 
+    def _clear_pending_sqlite(self, run_id: str):
+        if self._sqlite_conn is None:
+            raise RuntimeError("SQLite pending transfer outbox is not started")
+        self._sqlite_conn.execute(
+            f"""
+            UPDATE {self._table_name}
+            SET status = 'DISCARDED', updated_at = CURRENT_TIMESTAMP
+            WHERE run_id = ? AND status = 'PENDING'
+            """,
+            (run_id,),
+        )
+        self._sqlite_conn.commit()
+
     async def _open_mysql(self):
         import aiomysql
 
@@ -347,6 +369,20 @@ class PendingTransferOutbox:
                     WHERE run_id = %s AND dep_tag = %s
                     """,
                     (run_id, dep_tag),
+                )
+
+    async def _clear_pending_mysql(self, run_id: str):
+        if self._mysql_pool is None:
+            raise RuntimeError("MySQL pending transfer outbox is not started")
+        async with self._mysql_pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"""
+                    UPDATE {self._table_name}
+                    SET status = 'DISCARDED'
+                    WHERE run_id = %s AND status = 'PENDING'
+                    """,
+                    (run_id,),
                 )
 
     async def _register_run_mysql(self, run_id: str):
