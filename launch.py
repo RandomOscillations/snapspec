@@ -382,11 +382,54 @@ async def run_node(config: dict, node_id: int, node_only: bool = False):
             recovery_str = f", restore={recovery:.0%}" if recovery and recovery >= 0 else ""
             print(f" done ({committed}/{total} committed{recovery_str})")
 
-        # Print summary table
+        # Print per-test results
         print(f"\n{'='*60}")
         print("  RESULTS")
-        print(f"{'='*60}\n")
-        print_results_table(results)
+        print(f"{'='*60}")
+
+        test_num = 1
+        for strategy in results:
+            s = results[strategy]
+            label = strategy.replace("_", " ").title().replace("And", "&")
+            print(f"\n  Test {test_num}: {label}")
+            print(f"  {'-'*50}")
+            committed = int(s.get("snapshot_committed", 0))
+            total = int(s.get("snapshot_count", 0))
+            print(f"    Snapshots:        {committed}/{total} committed")
+            print(f"    Commit rate:      {s.get('snapshot_success_rate', 0):.1%}")
+            print(f"    p50 latency:      {s.get('p50_latency_ms', 0):.2f} ms")
+            print(f"    p99 latency:      {s.get('p99_latency_ms', 0):.2f} ms")
+            print(f"    Avg retries:      {s.get('avg_retry_rate', 0):.1f}")
+            print(f"    Restore verified: {s.get('recovery_rate', 0):.1%}")
+            test_num += 1
+
+        print(f"\n  Test {test_num}: Quantitative Validation")
+        print(f"  {'-'*50}")
+        # Show audit sums and message overhead across all strategies
+        for strategy in results:
+            s = results[strategy]
+            label = strategy.replace("_", " ").title().replace("And", "&")
+            bal = int(s.get("avg_balance_sum", 0))
+            transit = int(s.get("avg_in_transit", 0))
+            expected = int(wl_cfg.get("total_tokens", 0))
+            conv = s.get("avg_convergence_ms", 0)
+            msgs = int(s.get("avg_messages_per_snapshot", 0))
+            total_msgs = int(s.get("total_control_messages", 0))
+            causal = s.get("causal_consistency_rate", 0)
+            conservation = s.get("conservation_validity_rate", 0)
+            print(f"    [{label}]")
+            print(f"      Causal consistency:   {causal:.1%}")
+            print(f"      Conservation:         {conservation:.1%}")
+            print(f"      Audit sum:            {bal} + {transit} (in-transit) = {bal + transit} (expected: {expected})")
+            print(f"      Convergence time:     {conv:.2f} ms")
+            print(f"      Messages/snapshot:    {msgs}")
+            print(f"      Total control msgs:   {total_msgs}")
+
+        print(f"\n  Test {test_num + 1}: Failure Recovery")
+        print(f"  {'-'*50}")
+        print(f"    (Not yet implemented)")
+
+        print(f"\n{'='*60}")
         print(f"\nCSV files:")
         for p in csv_paths:
             print(f"  {p}")
