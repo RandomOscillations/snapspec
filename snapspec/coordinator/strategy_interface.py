@@ -100,9 +100,12 @@ class CoordinatorProtocol(Protocol):
         snapshot_ts: int,
         node_ids: list[int] | None = None,
     ) -> dict:
-        """Verify that a committed snapshot can be fully recovered from archives.
+        """Verify that a committed snapshot can restore the exact captured state.
 
-        Returns dict with recovery_success, node_results, balance_sum, etc.
+        Each node compares its archive against the ground truth captured at
+        snapshot creation time — block-by-block, byte-by-byte.
+
+        Returns dict with restore_verified, node_results, balance_sum, etc.
         """
         ...
 

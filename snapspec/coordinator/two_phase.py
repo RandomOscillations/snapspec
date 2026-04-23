@@ -139,7 +139,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                     cons.post_role_samples,
                 )
 
-        # Verify recovery if enabled
+        # Verify restore — proves archive can restore exact snapshot state
         recovery_verified = None
         recovery_balance_sum = None
         recovery_conservation = None
@@ -147,7 +147,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             rv = await coordinator.verify_snapshot_recovery(
                 ts, node_ids=responding_node_ids
             )
-            recovery_verified = rv["recovery_success"]
+            recovery_verified = rv["restore_verified"]
             recovery_balance_sum = rv["balance_sum"]
             recovery_conservation = rv.get("conservation_holds")
 

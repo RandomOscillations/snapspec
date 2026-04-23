@@ -79,6 +79,8 @@ class MySQLStorageNode(StorageNode):
         self._snapshot_conn = None
         self._balances: dict[int, int] = {}
         self._num_accounts = num_accounts
+        # Per-account ground truth for restore verification
+        self._account_ground_truth: dict[int, dict[int, int]] = {}  # snapshot_ts -> {acct: bal}
 
     # ── Startup / teardown ───────────────────────────────────────────────
 
@@ -114,9 +116,12 @@ class MySQLStorageNode(StorageNode):
 
     async def _open_snapshot_view(self, snapshot_ts: int):
         self._snapshot_balance = sum(self._balances.values())
+        # Capture per-account ground truth before any post-snapshot writes
+        self._account_ground_truth[snapshot_ts] = dict(self._balances)
         self._snapshot_conn = await self._mysql_bs.open_snapshot_conn_async()
         self.snapshot_ts = snapshot_ts
         self.block_store.create_snapshot(snapshot_ts)
+        self._capture_ground_truth(snapshot_ts)
         self.writes_during_snapshot = 0
 
     async def _close_snapshot_view(self):
@@ -267,6 +272,8 @@ class MySQLStorageNode(StorageNode):
             self.delta_blocks_at_discard.append(delta_count)
             self._writes_paused = False
             self.state = NodeState.IDLE
+            self._account_ground_truth.pop(self.snapshot_ts, None)
+            self._snapshot_ground_truth.pop(self.snapshot_ts, None)
             self._snapshot_balance = None
 
         logger.debug("Node %d: ABORTED (MySQL+C++) snapshot, delta_blocks=%d",
@@ -319,6 +326,8 @@ class MySQLStorageNode(StorageNode):
             self.total_writes = 0
             self.delta_blocks_at_discard = []
             self._archive_balances = {}
+            self._account_ground_truth = {}
+            self._snapshot_ground_truth = {}
 
         logger.info("Node %d: RESET (MySQL+C++, balance=%d)", self.node_id, new_balance)
         await self._send(writer, MessageType.ACK, ts)
@@ -345,6 +354,92 @@ class MySQLStorageNode(StorageNode):
             accounts=account_rows,
         )
 
+    async def _handle_verify_snapshot_restore(self, msg: dict, writer):
+        """Compare MySQL archive + C++ archive against ground truth.
+
+        For the MySQL hybrid node, we verify both:
+        1. Per-account balances in snapshot_archive table vs frozen _balances
+        2. C++ block data via the parent class's block-level comparison
+        """
+        ts = msg["logical_timestamp"]
+        snapshot_ts = msg.get("snapshot_ts", ts)
+        archive_path = f"{self.archive_dir}/node{self.node_id}_snap_{snapshot_ts}"
+
+        # --- C++ block-level verification (from parent) ---
+        ground_truth = self._snapshot_ground_truth.get(snapshot_ts)
+        archived_blocks = self.block_store.get_archived_blocks(archive_path)
+
+        blocks_verified = 0
+        block_mismatches = []
+
+        if ground_truth is not None and archived_blocks is not None:
+            for block_id, expected_data in ground_truth.items():
+                actual_data = archived_blocks.get(block_id)
+                if actual_data is None:
+                    if expected_data == b"\x00" * len(expected_data):
+                        blocks_verified += 1
+                    else:
+                        block_mismatches.append(block_id)
+                elif actual_data == expected_data:
+                    blocks_verified += 1
+                else:
+                    block_mismatches.append(block_id)
+
+        # --- MySQL per-account verification ---
+        account_gt = self._account_ground_truth.get(snapshot_ts)
+        archived_accounts = await self._mysql_bs.get_snapshot_archive_async(snapshot_ts)
+
+        accounts_verified = 0
+        account_mismatches = []
+
+        if account_gt is not None and archived_accounts:
+            archived_map = {aid: bal for aid, bal in archived_accounts}
+            for acct_id, expected_bal in account_gt.items():
+                actual_bal = archived_map.get(acct_id)
+                if actual_bal == expected_bal:
+                    accounts_verified += 1
+                else:
+                    account_mismatches.append({
+                        "account_id": acct_id,
+                        "expected": expected_bal,
+                        "actual": actual_bal,
+                    })
+
+        # Balance check
+        snapshot_balance = self._archive_balances.get(archive_path)
+        gt_balance = sum(account_gt.values()) if account_gt else None
+        balance_match = snapshot_balance is not None and snapshot_balance == gt_balance
+
+        restore_verified = (
+            len(block_mismatches) == 0
+            and len(account_mismatches) == 0
+            and balance_match
+        )
+
+        # Clean up
+        self._snapshot_ground_truth.pop(snapshot_ts, None)
+        self._account_ground_truth.pop(snapshot_ts, None)
+
+        logger.info(
+            "Node %d: RESTORE_VERIFIED (MySQL+C++) ts=%d verified=%s "
+            "blocks=%d/%d accounts=%d/%d balance_match=%s",
+            self.node_id, snapshot_ts, restore_verified,
+            blocks_verified, blocks_verified + len(block_mismatches),
+            accounts_verified, accounts_verified + len(account_mismatches),
+            balance_match,
+        )
+
+        await self._send(writer, MessageType.RESTORE_VERIFIED, ts,
+                         snapshot_ts=snapshot_ts,
+                         restore_verified=restore_verified,
+                         blocks_verified=blocks_verified,
+                         blocks_mismatched=len(block_mismatches),
+                         accounts_verified=accounts_verified,
+                         accounts_mismatched=len(account_mismatches),
+                         mismatched_accounts=account_mismatches[:20],
+                         balance_match=balance_match,
+                         snapshot_balance=snapshot_balance)
+
     _DISPATCH: dict[str, Any] = {
         MessageType.PING.value: StorageNode._handle_ping,
         MessageType.WRITE.value: _handle_write,
@@ -357,6 +452,7 @@ class MySQLStorageNode(StorageNode):
         MessageType.ABORT.value: _handle_abort,
         MessageType.GET_WRITE_LOG.value: _handle_get_write_log,
         MessageType.GET_SNAPSHOT_STATE.value: _handle_get_snapshot_state,
+        MessageType.VERIFY_SNAPSHOT_RESTORE.value: _handle_verify_snapshot_restore,
         MessageType.RESET.value: _handle_reset,
         MessageType.SHUTDOWN.value: StorageNode._handle_shutdown,
     }

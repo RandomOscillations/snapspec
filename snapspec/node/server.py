@@ -223,6 +223,10 @@ class StorageNode:
         # Archive metadata: maps archive_path -> snapshot-time balance
         self._archive_balances: dict[str, int] = {}
 
+        # Snapshot ground truth: maps snapshot_ts -> {block_id: bytes}
+        # Captured at snapshot creation for restore verification
+        self._snapshot_ground_truth: dict[int, dict[int, bytes]] = {}
+
         # Server internals
         self._server: asyncio.Server | None = None
         self._connections: list[asyncio.StreamWriter] = []
@@ -306,6 +310,7 @@ class StorageNode:
         self._writes_paused = False
         self.state = NodeState.IDLE
         self._snapshot_balance = None
+        self._snapshot_ground_truth.pop(self.snapshot_ts, None)
         self.snapshot_ts = 0
         self._persist_runtime_state()
 
@@ -436,6 +441,19 @@ class StorageNode:
         ts = original_msg.get("logical_timestamp", 0)
         await self._send(writer, MessageType.ACK, ts, error=detail)
 
+    def _capture_ground_truth(self, snapshot_ts: int):
+        """Read all blocks right after create_snapshot() to record ground truth.
+
+        At this point no post-snapshot writes have occurred, so read() returns
+        exactly the state that the snapshot captured — regardless of block store
+        type (ROW, COW, FullCopy, MockBlockStore).
+        """
+        total = self.block_store.get_total_blocks()
+        ground_truth = {}
+        for block_id in range(total):
+            ground_truth[block_id] = bytes(self.block_store.read(block_id))
+        self._snapshot_ground_truth[snapshot_ts] = ground_truth
+
     # ── Message Handlers ────────────────────────────────────────────────
 
     async def _handle_ping(self, msg: dict, writer: asyncio.StreamWriter):
@@ -514,6 +532,7 @@ class StorageNode:
             self.snapshot_ts = snapshot_ts
             self._snapshot_balance = self._balance  # freeze balance at snapshot time
             self.block_store.create_snapshot(snapshot_ts)
+            self._capture_ground_truth(snapshot_ts)
             self.state = NodeState.PREPARED
             self.writes_during_snapshot = 0
 
@@ -542,6 +561,7 @@ class StorageNode:
             self.snapshot_ts = snapshot_ts
             self._snapshot_balance = self._balance  # freeze balance at snapshot time
             self.block_store.create_snapshot(snapshot_ts)
+            self._capture_ground_truth(snapshot_ts)
             self.state = NodeState.SNAPPED
             self.writes_during_snapshot = 0
 
@@ -665,6 +685,7 @@ class StorageNode:
             self.delta_blocks_at_discard.append(delta_count)
             self._writes_paused = False
             self.state = NodeState.IDLE
+            self._snapshot_ground_truth.pop(self.snapshot_ts, None)
             self._snapshot_balance = None
 
         log_event(
@@ -729,6 +750,7 @@ class StorageNode:
             self.total_writes = 0
             self.delta_blocks_at_discard = []
             self._archive_balances = {}
+            self._snapshot_ground_truth = {}
             self._persist_runtime_state()
 
         log_event(
@@ -766,6 +788,81 @@ class StorageNode:
                          block_count=len(archived),
                          snapshot_balance=snapshot_balance)
 
+    async def _handle_verify_snapshot_restore(self, msg: dict, writer: asyncio.StreamWriter):
+        """Compare the committed archive against the ground truth captured at snapshot time.
+
+        This is the definitive test: can the archived snapshot restore the exact
+        state that existed when the snapshot was created?
+        """
+        ts = msg["logical_timestamp"]
+        snapshot_ts = msg.get("snapshot_ts", ts)
+        archive_path = f"{self.archive_dir}/node{self.node_id}_snap_{snapshot_ts}"
+
+        async with self._state_lock:
+            ground_truth = self._snapshot_ground_truth.get(snapshot_ts)
+            archived = self.block_store.get_archived_blocks(archive_path)
+            snapshot_balance = self._archive_balances.get(archive_path)
+
+        if ground_truth is None:
+            await self._send_error(writer, msg, f"No ground truth for snapshot {snapshot_ts}")
+            return
+
+        if archived is None:
+            await self._send(writer, MessageType.RESTORE_VERIFIED, ts,
+                             snapshot_ts=snapshot_ts,
+                             restore_verified=False,
+                             error="Archive not found",
+                             blocks_verified=0, blocks_mismatched=0,
+                             balance_match=False)
+            return
+
+        # Block-by-block comparison
+        blocks_verified = 0
+        mismatched_blocks = []
+
+        for block_id, expected_data in ground_truth.items():
+            actual_data = archived.get(block_id)
+            if actual_data is None:
+                # Block missing from archive — check if it was all zeros (empty)
+                if expected_data == b"\x00" * len(expected_data):
+                    # Archive skips zero blocks — this is OK
+                    blocks_verified += 1
+                else:
+                    mismatched_blocks.append(block_id)
+            elif actual_data == expected_data:
+                blocks_verified += 1
+            else:
+                mismatched_blocks.append(block_id)
+
+        # Balance verification
+        ground_truth_balance = self._archive_balances.get(archive_path)
+        balance_match = snapshot_balance is not None and snapshot_balance == ground_truth_balance
+
+        restore_verified = len(mismatched_blocks) == 0 and balance_match
+
+        # Clean up ground truth — no longer needed
+        self._snapshot_ground_truth.pop(snapshot_ts, None)
+
+        log_event(
+            logger,
+            component=self._component,
+            event="restore_verified",
+            snapshot_ts=snapshot_ts,
+            restore_verified=restore_verified,
+            blocks_verified=blocks_verified,
+            blocks_mismatched=len(mismatched_blocks),
+            balance_match=balance_match,
+        )
+
+        await self._send(writer, MessageType.RESTORE_VERIFIED, ts,
+                         snapshot_ts=snapshot_ts,
+                         restore_verified=restore_verified,
+                         blocks_verified=blocks_verified,
+                         blocks_mismatched=len(mismatched_blocks),
+                         mismatched_block_ids=mismatched_blocks[:20],
+                         balance_match=balance_match,
+                         snapshot_balance=snapshot_balance)
+
     async def _handle_shutdown(self, msg: dict, writer: asyncio.StreamWriter):
         ts = msg["logical_timestamp"]
 
@@ -796,6 +893,7 @@ class StorageNode:
         MessageType.ABORT.value: _handle_abort,
         MessageType.GET_WRITE_LOG.value: _handle_get_write_log,
         MessageType.GET_SNAPSHOT_STATE.value: _handle_get_snapshot_state,
+        MessageType.VERIFY_SNAPSHOT_RESTORE.value: _handle_verify_snapshot_restore,
         MessageType.RESET.value: _handle_reset,
         MessageType.SHUTDOWN.value: _handle_shutdown,
     }

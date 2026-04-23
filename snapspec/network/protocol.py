@@ -38,9 +38,11 @@ class MessageType(str, Enum):
     READ_RESP = "READ_RESP"
     PAUSED_ERR = "PAUSED_ERR"
 
-    # Recovery
+    # Recovery & restore verification
     GET_SNAPSHOT_STATE = "GET_SNAPSHOT_STATE"
     SNAPSHOT_STATE = "SNAPSHOT_STATE"
+    VERIFY_SNAPSHOT_RESTORE = "VERIFY_SNAPSHOT_RESTORE"
+    RESTORE_VERIFIED = "RESTORE_VERIFIED"
 
     # Node management
     RESET = "RESET"

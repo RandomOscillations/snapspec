@@ -245,64 +245,75 @@ class Coordinator:
         snapshot_ts: int,
         node_ids: list[int] | None = None,
     ) -> dict:
-        """Verify that a committed snapshot can be fully recovered.
+        """Verify that a committed snapshot can fully restore the captured state.
 
-        Requests archived snapshot state from every node, checks:
-          1. Every node has the archive
-          2. Snapshot-time balances sum to expected_total (conservation)
-          3. Block data is present and non-empty
+        Sends VERIFY_SNAPSHOT_RESTORE to every node. Each node compares its
+        archived snapshot against the ground truth it captured at snapshot
+        creation time — block-by-block, byte-by-byte. No block data crosses
+        the network; each node does its own comparison locally.
 
-        Returns a dict with recovery_success, node_results, balance_sum, etc.
+        Returns a dict with restore_verified (all nodes pass), per-node results,
+        and aggregate balance info.
         """
-        async def _fetch_one(conn: NodeConnection) -> dict | None:
+        async def _verify_one(conn: NodeConnection) -> dict | None:
             return await self._send_with_timeout(
                 conn,
-                MessageType.GET_SNAPSHOT_STATE,
+                MessageType.VERIFY_SNAPSHOT_RESTORE,
                 snapshot_ts,
                 timeout_s=self.operation_timeout_s,
                 snapshot_ts=snapshot_ts,
-                error_context="Recovery verification",
+                error_context="Restore verification",
             )
 
         connections = self._select_connections(node_ids)
-        responses = await asyncio.gather(*[_fetch_one(c) for c in connections])
+        responses = await asyncio.gather(*[_verify_one(c) for c in connections])
 
         node_results = []
         total_balance = 0
-        all_recovered = True
+        all_verified = True
 
         for i, resp in enumerate(responses):
             nid = connections[i].node_id
-            if resp is None or resp.get("type") != MessageType.SNAPSHOT_STATE.value:
+            if resp is None or resp.get("type") != MessageType.RESTORE_VERIFIED.value:
                 node_results.append({
-                    "node_id": nid, "recovered": False,
+                    "node_id": nid,
+                    "restore_verified": False,
                     "error": resp.get("error", "No response") if resp else "No response",
                 })
-                all_recovered = False
+                all_verified = False
                 continue
 
-            block_count = resp.get("block_count", 0)
+            node_verified = resp.get("restore_verified", False)
             snapshot_balance = resp.get("snapshot_balance")
             if snapshot_balance is not None:
                 total_balance += snapshot_balance
 
-            node_results.append({
+            node_result = {
                 "node_id": nid,
-                "recovered": True,
-                "block_count": block_count,
+                "restore_verified": node_verified,
+                "blocks_verified": resp.get("blocks_verified", 0),
+                "blocks_mismatched": resp.get("blocks_mismatched", 0),
+                "balance_match": resp.get("balance_match", False),
                 "snapshot_balance": snapshot_balance,
-            })
+            }
+            # Include MySQL-specific fields if present
+            if "accounts_verified" in resp:
+                node_result["accounts_verified"] = resp["accounts_verified"]
+                node_result["accounts_mismatched"] = resp.get("accounts_mismatched", 0)
 
+            node_results.append(node_result)
+            if not node_verified:
+                all_verified = False
+
+        participating = node_ids or [c.node_id for c in connections]
         result = {
-            "recovery_success": all_recovered,
+            "restore_verified": all_verified,
             "node_results": node_results,
             "balance_sum": total_balance,
             "expected_total": self.expected_total,
-            "participating_nodes": node_ids or [c.node_id for c in connections],
+            "participating_nodes": participating,
             "conservation_holds": (
-                total_balance == self.expected_total_for_participants(
-                    node_ids or [c.node_id for c in connections]
-                )
+                total_balance == self.expected_total_for_participants(participating)
                 if self.expected_total > 0 else None
             ),
         }

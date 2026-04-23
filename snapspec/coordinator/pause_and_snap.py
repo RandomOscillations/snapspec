@@ -142,13 +142,13 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     await coordinator.send_all(_RESUME, ts, node_ids=responding_node_ids)
     coordinator.resume_workload()
 
-    # Phase 6: Verify recovery if enabled
+    # Phase 6: Verify restore — proves archive can restore exact snapshot state
     recovery_verified = None
     recovery_balance_sum = None
     recovery_conservation = None
     if coordinator.expected_total > 0:
         rv = await coordinator.verify_snapshot_recovery(ts, node_ids=responding_node_ids)
-        recovery_verified = rv["recovery_success"]
+        recovery_verified = rv["restore_verified"]
         recovery_balance_sum = rv["balance_sum"]
         recovery_conservation = rv.get("conservation_holds")
 
