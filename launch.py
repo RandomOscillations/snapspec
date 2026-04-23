@@ -438,9 +438,10 @@ Examples:
 
     config = load_config(args.config)
 
+    is_coord = (args.id == config.get("coordinator_node", 0)) and not args.node_only
     log_path = configure_logging(
         default_basename=f"node{args.id}",
-        level=logging.INFO,
+        level=logging.WARNING if is_coord else logging.INFO,
     )
 
     asyncio.run(run_node(config, args.id, node_only=args.node_only))
