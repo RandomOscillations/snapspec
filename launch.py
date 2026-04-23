@@ -225,7 +225,9 @@ def print_results_table(results: dict):
         print(row)
 
 
-async def run_node(config: dict, node_id: int, node_only: bool = False, recover: bool = False):
+async def run_node(config: dict, node_id: int, node_only: bool = False,
+                   recover: bool = False, strategy_override: str | None = None,
+                   duration_override: int | None = None):
     """Start a storage node with co-located workload."""
     nodes = config["nodes"]
     my_node = next(n for n in nodes if n["id"] == node_id)
@@ -349,9 +351,12 @@ async def run_node(config: dict, node_id: int, node_only: bool = False, recover:
     if is_coordinator:
 
         # Run experiments
-        strategy_str = exp_cfg.get("strategies", "all")
-        strategies = STRATEGIES if strategy_str == "all" else [strategy_str]
-        duration = exp_cfg.get("duration_s", 15)
+        if strategy_override:
+            strategies = [strategy_override]
+        else:
+            strategy_str = exp_cfg.get("strategies", "all")
+            strategies = STRATEGIES if strategy_str == "all" else [strategy_str]
+        duration = duration_override or exp_cfg.get("duration_s", 15)
 
         print(f"\n{'='*60}")
         print(f"  Running experiments: {', '.join(strategies)}")
@@ -505,6 +510,11 @@ Examples:
     parser.add_argument("--config", default="cluster.yaml", help="Cluster config file")
     parser.add_argument("--node-only", action="store_true",
                         help="Run as a node only, even if this is the coordinator node")
+    parser.add_argument("--strategy", type=str, default=None,
+                        choices=["pause_and_snap", "two_phase", "speculative"],
+                        help="Override strategy (runs only this one)")
+    parser.add_argument("--duration", type=int, default=None,
+                        help="Override experiment duration in seconds")
     parser.add_argument("--recover", action="store_true",
                         help="Recovery mode: restore from last snapshot instead of clean start")
     parser.add_argument("--detect-ip", action="store_true",
@@ -526,7 +536,13 @@ Examples:
         level=logging.WARNING if is_coord else logging.INFO,
     )
 
-    asyncio.run(run_node(config, args.id, node_only=args.node_only, recover=args.recover))
+    asyncio.run(run_node(
+        config, args.id,
+        node_only=args.node_only,
+        recover=args.recover,
+        strategy_override=args.strategy,
+        duration_override=args.duration,
+    ))
 
 
 if __name__ == "__main__":
