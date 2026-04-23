@@ -230,6 +230,13 @@ async def run_node(config: dict, node_id: int, node_only: bool = False):
 
     local_ip = get_local_ip()
     archive_dir = f"/tmp/snapspec_archives/node{node_id}"
+    data_dir = f"/tmp/snapspec_data/node{node_id}"
+
+    # Clean stale state from previous runs
+    import shutil
+    for d in (archive_dir, data_dir):
+        if os.path.exists(d):
+            shutil.rmtree(d)
     os.makedirs(archive_dir, exist_ok=True)
 
     # Build block store
@@ -255,52 +262,34 @@ async def run_node(config: dict, node_id: int, node_only: bool = False):
     print(f"  Role:         {'Coordinator + Node' if is_coordinator else 'Node'}")
     print(f"{'='*60}\n")
 
-    # Start workload
     remote_nodes = [
         {"node_id": n["id"], "host": n["host"], "port": n["port"]}
         for n in nodes if n["id"] != node_id
     ]
-    workload = NodeWorkload(
-        node_id=node_id,
-        local_port=actual_port,
-        remote_nodes=remote_nodes,
-        write_rate=wl_cfg.get("write_rate", 200),
-        cross_node_ratio=wl_cfg.get("cross_node_ratio", 0.2),
-        initial_balance=per_node,
-        total_tokens=total_tokens,
-        num_nodes=num_nodes,
-        block_size=block_size,
-        total_blocks=total_blocks,
-    )
-    node.set_transfer_amounts(workload._transfer_amounts)
-    await workload.start()
-    print(f"Workload started: {wl_cfg.get('write_rate', 200)} writes/s, "
-          f"{wl_cfg.get('cross_node_ratio', 0.2):.0%} cross-node\n")
+
+    # Build node_configs (used by both coordinator and non-coordinator paths)
+    node_configs = [
+        {"node_id": n["id"], "host": n["host"], "port": n["port"]}
+        for n in nodes
+    ]
+    # Use localhost for our own node
+    for nc in node_configs:
+        if nc["node_id"] == node_id:
+            nc["host"] = "127.0.0.1"
+            nc["port"] = actual_port
+
+    # Wait for all other nodes before starting workload
+    print("Waiting for all nodes to come online...")
+    await wait_for_nodes(node_configs)
+    print("All nodes ready.\n")
 
     if is_coordinator:
-        # This is the coordinator node — run experiments
-        node_configs = [
-            {"node_id": n["id"], "host": n["host"], "port": n["port"]}
-            for n in nodes
-        ]
-        # Use localhost for our own node
-        for nc in node_configs:
-            if nc["node_id"] == node_id:
-                nc["host"] = "127.0.0.1"
-                nc["port"] = actual_port
-
-        print("Waiting for all nodes to come online...")
-        await wait_for_nodes(node_configs)
-        print()
-
         # Reset all nodes
         balances = [per_node] * num_nodes
         balances[0] += total_tokens - per_node * num_nodes
         print(f"Resetting all nodes (balance per node: {per_node})...")
         await reset_nodes(node_configs, balances)
 
-        # Restart workload after reset
-        await workload.stop()
         workload = NodeWorkload(
             node_id=node_id,
             local_port=actual_port,
@@ -313,8 +302,26 @@ async def run_node(config: dict, node_id: int, node_only: bool = False):
             block_size=block_size,
             total_blocks=total_blocks,
         )
-        node.set_transfer_amounts(workload._transfer_amounts)
-        await workload.start()
+    else:
+        workload = NodeWorkload(
+            node_id=node_id,
+            local_port=actual_port,
+            remote_nodes=remote_nodes,
+            write_rate=wl_cfg.get("write_rate", 200),
+            cross_node_ratio=wl_cfg.get("cross_node_ratio", 0.2),
+            initial_balance=per_node,
+            total_tokens=total_tokens,
+            num_nodes=num_nodes,
+            block_size=block_size,
+            total_blocks=total_blocks,
+        )
+
+    node.set_transfer_amounts(workload._transfer_amounts)
+    await workload.start()
+    print(f"Workload started: {wl_cfg.get('write_rate', 200)} writes/s, "
+          f"{wl_cfg.get('cross_node_ratio', 0.2):.0%} cross-node\n")
+
+    if is_coordinator:
 
         # Run experiments
         strategy_str = exp_cfg.get("strategies", "all")
