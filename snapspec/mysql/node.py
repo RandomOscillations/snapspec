@@ -453,6 +453,8 @@ class MySQLStorageNode(StorageNode):
         MessageType.GET_WRITE_LOG.value: _handle_get_write_log,
         MessageType.GET_SNAPSHOT_STATE.value: _handle_get_snapshot_state,
         MessageType.VERIFY_SNAPSHOT_RESTORE.value: _handle_verify_snapshot_restore,
+        MessageType.DRAIN_WORKLOAD.value: StorageNode._handle_drain_workload,
+        MessageType.RESUME_WORKLOAD.value: StorageNode._handle_resume_workload,
         MessageType.RESET.value: _handle_reset,
         MessageType.SHUTDOWN.value: StorageNode._handle_shutdown,
     }

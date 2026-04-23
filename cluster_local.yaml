@@ -1,0 +1,30 @@
+# Local 3-node test — all on localhost, different ports
+# Use this to verify demo results before running on real machines
+
+nodes:
+  - id: 0
+    host: "127.0.0.1"
+    port: 9100
+  - id: 1
+    host: "127.0.0.1"
+    port: 9101
+  - id: 2
+    host: "127.0.0.1"
+    port: 9102
+
+coordinator_node: 0
+
+workload:
+  write_rate: 20
+  cross_node_ratio: 0.2
+  total_tokens: 30000
+  block_size: 64
+  total_blocks: 32
+
+experiment:
+  duration_s: 5
+  snapshot_interval_s: 1.0
+  strategies: "all"
+  output_dir: "results/local_demo"
+
+block_store: "row"

@@ -317,6 +317,7 @@ async def run_node(config: dict, node_id: int, node_only: bool = False):
         )
 
     node.set_transfer_amounts(workload._transfer_amounts)
+    node.set_workload(workload)
     await workload.start()
     print(f"Workload started: {wl_cfg.get('write_rate', 200)} writes/s, "
           f"{wl_cfg.get('cross_node_ratio', 0.2):.0%} cross-node\n")
@@ -356,6 +357,7 @@ async def run_node(config: dict, node_id: int, node_only: bool = False):
                     total_blocks=total_blocks,
                 )
                 node.set_transfer_amounts(workload._transfer_amounts)
+                node.set_workload(workload)
                 await workload.start()
 
             print(f"  [{strategy}] running for {duration}s...", end="", flush=True)

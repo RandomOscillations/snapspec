@@ -93,6 +93,7 @@ class Coordinator:
 
         # Workload reference — set via set_workload() for drain coordination
         self._workload = None
+        self._remote_pending_transfers: dict[int, dict] = {}
 
         # Connections: ordered list matching node_configs order
         self._connections: list[NodeConnection] = []
@@ -201,7 +202,7 @@ class Coordinator:
 
         connections = self._select_connections(node_ids)
 
-        async def _collect_one(conn: NodeConnection) -> tuple[int, list[dict], int, dict, bool]:
+        async def _collect_one(conn: NodeConnection) -> tuple[int, list[dict], int, dict, dict, bool]:
             resp = await self._send_with_timeout(
                 conn,
                 MessageType.GET_WRITE_LOG,
@@ -210,15 +211,15 @@ class Coordinator:
                 error_context="Write log collection",
             )
             if resp is None:
-                return conn.node_id, [], 0, {}, False
+                return conn.node_id, [], 0, {}, {}, False
             entries = [
                 {**entry, "node_id": conn.node_id}
                 for entry in resp.get("entries", [])
             ]
             snapshot_balance = resp.get("snapshot_balance", resp.get("balance", 0))
-            # Collect transfer_amounts from node-local workloads
             node_transfers = resp.get("transfer_amounts", {})
-            return conn.node_id, entries, snapshot_balance, node_transfers, True
+            node_pending = resp.get("pending_transfer_records", {})
+            return conn.node_id, entries, snapshot_balance, node_transfers, node_pending, True
 
         pairs = await asyncio.gather(
             *[_collect_one(c) for c in connections]
@@ -226,7 +227,7 @@ class Coordinator:
         all_logs = []
         snapshot_balances = []
         responding_node_ids = []
-        for node_id, entries, snapshot_balance, node_transfers, ok in pairs:
+        for node_id, entries, snapshot_balance, node_transfers, node_pending, ok in pairs:
             if not ok:
                 continue
             responding_node_ids.append(node_id)
@@ -236,6 +237,10 @@ class Coordinator:
             if node_transfers:
                 for tag, amount in node_transfers.items():
                     self.transfer_amounts[int(tag)] = int(amount)
+            # Merge node-local pending_transfer_records
+            if node_pending:
+                for tag, record in node_pending.items():
+                    self._remote_pending_transfers[int(tag)] = record
 
         self._update_last_known_balances(responding_node_ids, snapshot_balances)
         return all_logs, snapshot_balances, responding_node_ids
@@ -429,26 +434,37 @@ class Coordinator:
 
     @property
     def pending_transfer_records(self) -> dict[int, dict]:
-        if self._workload is None:
-            return {}
-        records = getattr(self._workload, "pending_transfer_records", None)
-        if records is None:
-            return {}
+        records = dict(self._remote_pending_transfers)
+        if self._workload is not None:
+            local = getattr(self._workload, "pending_transfer_records", None)
+            if local:
+                records.update(local)
         return records
 
     async def drain_workload(self) -> None:
-        """Drain in-flight transfers in the workload generator.
+        """Drain in-flight transfers on ALL nodes' workloads.
 
-        Blocks until any half-completed cross-node transfer finishes.
-        No-op if no workload is registered.
+        Sends DRAIN_WORKLOAD to every node, which tells the co-located
+        NodeWorkload to finish any half-completed cross-node transfer.
+        Also drains the local workload if one is registered.
         """
         if self._workload is not None:
             await self._workload.drain()
+        # Drain remote nodes' workloads too
+        if self._connections:
+            ts = self.tick()
+            await self.send_all(MessageType.DRAIN_WORKLOAD.value, ts)
 
     def resume_workload(self) -> None:
-        """Re-enable cross-node transfers after drain. No-op if no workload."""
+        """Re-enable cross-node transfers on ALL nodes' workloads."""
         if self._workload is not None:
             self._workload.resume_transfers()
+        # Resume remote nodes' workloads too
+        if self._connections:
+            ts = self.tick()
+            asyncio.ensure_future(
+                self.send_all(MessageType.RESUME_WORKLOAD.value, ts)
+            )
 
     async def run(self, duration_s: float):
         """Convenience: start, run snapshot loop for duration, then stop."""

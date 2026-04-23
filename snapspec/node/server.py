@@ -211,6 +211,7 @@ class StorageNode:
         # Transfer amounts — populated by a co-located NodeWorkload (if any).
         # The coordinator collects these via GET_WRITE_LOG for conservation.
         self._local_transfer_amounts: dict[int, int] = {}
+        self._local_workload = None  # set via set_workload()
 
         # Serializes write/snapshot operations (FM1: race prevention)
         self._state_lock = asyncio.Lock()
@@ -240,6 +241,10 @@ class StorageNode:
         validation. Call this after creating a co-located NodeWorkload.
         """
         self._local_transfer_amounts = amounts
+
+    def set_workload(self, workload) -> None:
+        """Register the co-located NodeWorkload for drain/resume coordination."""
+        self._local_workload = workload
 
     @property
     def actual_port(self) -> int:
@@ -493,7 +498,7 @@ class StorageNode:
                 self._balance += msg["balance_delta"]
 
         await self._send(writer, MessageType.WRITE_ACK, ts, block_id=block_id)
-        if dep_tag > 0 or self.total_writes <= 3 or self.total_writes % 250 == 0:
+        if self.total_writes <= 3 or self.total_writes % 500 == 0:
             log_event(
                 logger,
                 component=self._component,
@@ -620,6 +625,20 @@ class StorageNode:
         )
         await self._send(writer, MessageType.ACK, ts)
 
+    async def _handle_drain_workload(self, msg: dict, writer: asyncio.StreamWriter):
+        """Drain the co-located workload's in-flight cross-node transfers."""
+        ts = msg["logical_timestamp"]
+        if self._local_workload is not None:
+            await self._local_workload.drain()
+        await self._send(writer, MessageType.WORKLOAD_DRAINED, ts)
+
+    async def _handle_resume_workload(self, msg: dict, writer: asyncio.StreamWriter):
+        """Re-enable cross-node transfers on the co-located workload."""
+        ts = msg["logical_timestamp"]
+        if self._local_workload is not None:
+            self._local_workload.resume_transfers()
+        await self._send(writer, MessageType.ACK, ts)
+
     async def _handle_commit(self, msg: dict, writer: asyncio.StreamWriter):
         ts = msg["logical_timestamp"]
 
@@ -716,10 +735,16 @@ class StorageNode:
 
         # Return snapshot-time balance if available, otherwise live balance
         balance = self._snapshot_balance if self._snapshot_balance is not None else self._balance
+        # Include pending transfer records from co-located workload
+        pending_records = {}
+        if self._local_workload is not None:
+            pending_records = self._local_workload.pending_transfer_records
+
         await self._send(writer, MessageType.WRITE_LOG, ts,
                          entries=entries, balance=balance,
                          snapshot_balance=balance,
-                         transfer_amounts=self._local_transfer_amounts)
+                         transfer_amounts=self._local_transfer_amounts,
+                         pending_transfer_records=pending_records)
 
     async def _handle_reset(self, msg: dict, writer: asyncio.StreamWriter):
         """Reset node to initial state — used between strategy runs."""
@@ -894,6 +919,8 @@ class StorageNode:
         MessageType.GET_WRITE_LOG.value: _handle_get_write_log,
         MessageType.GET_SNAPSHOT_STATE.value: _handle_get_snapshot_state,
         MessageType.VERIFY_SNAPSHOT_RESTORE.value: _handle_verify_snapshot_restore,
+        MessageType.DRAIN_WORKLOAD.value: _handle_drain_workload,
+        MessageType.RESUME_WORKLOAD.value: _handle_resume_workload,
         MessageType.RESET.value: _handle_reset,
         MessageType.SHUTDOWN.value: _handle_shutdown,
     }

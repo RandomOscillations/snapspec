@@ -287,16 +287,6 @@ class NodeWorkload:
             )
             self._pending_effects[dep_tag] = pending
             await self._persist_pending_effect(pending)
-            log_event(
-                logger,
-                component=f"node-workload-{self.node_id}",
-                event="transfer_pending",
-                source=self.node_id,
-                dest=dest_id,
-                amount=amount,
-                dep_tag=dep_tag,
-                pending_transfers=len(self._pending_effects),
-            )
 
             credit_writes = await self._flush_pending_effect(dep_tag)
             return 1 + credit_writes
@@ -361,16 +351,6 @@ class NodeWorkload:
 
         await self._mark_pending_effect_applied(pending)
         self._pending_effects.pop(dep_tag, None)
-        log_event(
-            logger,
-            component=f"node-workload-{self.node_id}",
-            event="transfer",
-            source=pending.source,
-            dest=pending.dest,
-            amount=pending.amount,
-            dep_tag=pending.dep_tag,
-            pending_transfers=len(self._pending_effects),
-        )
         return 1
 
     async def _do_local_write(self):
