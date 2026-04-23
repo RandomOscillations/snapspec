@@ -44,6 +44,7 @@ class PendingTransfer:
     block_id: int
     data: bytes
     amount: int
+    debit_ts: int = 0
     attempts: int = 0
     next_retry_at: float = 0.0
 
@@ -115,6 +116,7 @@ class NodeWorkload:
                 "source_node_id": pending.source,
                 "dest_node_id": pending.dest,
                 "attempts": pending.attempts,
+                "debit_ts": pending.debit_ts,
             }
             for tag, pending in self._pending_effects.items()
         }
@@ -204,13 +206,55 @@ class NodeWorkload:
         self._draining = True
         await self._transfer_idle.wait()
 
+    async def pause_all(self):
+        """Stop the write loop without closing existing connections."""
+        self._running = False
+        self._draining = True
+
+        if self._task and not self._task.done():
+            try:
+                await asyncio.wait_for(
+                    self._transfer_idle.wait(),
+                    timeout=_SHUTDOWN_TIMEOUT_S,
+                )
+                await asyncio.wait_for(self._task, timeout=_SHUTDOWN_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                self._task.cancel()
+                try:
+                    await self._task
+                except asyncio.CancelledError:
+                    pass
+
     def resume_transfers(self):
         """Re-enable cross-node transfers."""
+        if not self._running and self._local_conn is not None:
+            self._running = True
+            self._task = asyncio.create_task(self._run_loop())
         self._draining = False
 
     def set_local_balance(self, balance: int):
         """Reset the workload's source-balance estimate after node restore."""
         self._local_balance = balance
+
+    async def reset_for_experiment(self, balance: int, restart: bool = True):
+        """Reset workload-side token metadata at an experiment boundary."""
+        was_running = self._running
+        await self.pause_all()
+
+        self._pending_effects.clear()
+        if self._pending_outbox is not None:
+            await self._pending_outbox.clear_pending(self._outbox_run_id)
+
+        self._local_balance = balance
+        self._transfer_amounts.clear()
+        self._dep_tag_counter = self.node_id * 1_000_000
+        self._writes_completed = 0
+        self._transfer_idle.set()
+
+        if was_running and restart:
+            self._running = True
+            self._draining = False
+            self._task = asyncio.create_task(self._run_loop())
 
     async def clear_pending_effects(self):
         """Drop source-owned pending effects after a coordinated global rollback.
@@ -268,8 +312,8 @@ class NodeWorkload:
         """Debit locally, persist the pending credit, then replay it."""
         self._transfer_idle.clear()
         try:
-            # Skip destinations with pending unresolved transfers (likely dead)
-            dead_dests = {p.dest for p in self._pending_effects.values() if p.attempts >= 2}
+            # Skip destinations with ANY pending transfers (likely dead or slow)
+            dead_dests = {p.dest for p in self._pending_effects.values()}
             available = [nid for nid in self._remote_conns if nid not in dead_dests]
             if not available:
                 self._transfer_idle.set()
@@ -284,19 +328,6 @@ class NodeWorkload:
             block_id = self._rng.randint(0, self._total_blocks - 1)
             data = os.urandom(self._block_size)
 
-            debit_ts = self.tick()
-            await self._send_write_with_retry(
-                self._local_conn,
-                block_id,
-                data,
-                debit_ts,
-                dep_tag=dep_tag,
-                role="CAUSE",
-                partner=dest_id,
-                balance_delta=-amount,
-            )
-
-            self._local_balance -= amount
             self._transfer_amounts[dep_tag] = amount
             pending = PendingTransfer(
                 dep_tag=dep_tag,
@@ -305,8 +336,26 @@ class NodeWorkload:
                 block_id=block_id,
                 data=data,
                 amount=amount,
+                debit_ts=0,
             )
             self._pending_effects[dep_tag] = pending
+            try:
+                pending.debit_ts = await self._send_write_with_retry(
+                    self._local_conn,
+                    block_id,
+                    data,
+                    self.tick(),
+                    dep_tag=dep_tag,
+                    role="CAUSE",
+                    partner=dest_id,
+                    balance_delta=-amount,
+                )
+            except Exception:
+                self._pending_effects.pop(dep_tag, None)
+                self._transfer_amounts.pop(dep_tag, None)
+                raise
+
+            self._local_balance -= amount
             await self._persist_pending_effect(pending)
 
             credit_writes = await self._flush_pending_effect(dep_tag)
@@ -401,7 +450,7 @@ class NodeWorkload:
         role: str,
         partner: int,
         balance_delta: int,
-    ):
+    ) -> int:
         """Send a write, retrying on PAUSED_ERR."""
         if conn is None:
             raise ConnectionError("NodeWorkload connection is not initialized")
@@ -424,11 +473,12 @@ class NodeWorkload:
                 raise ConnectionError(f"Node {conn.node_id} closed connection")
 
             if resp.get("type") == MessageType.WRITE_ACK.value:
+                write_ts = resp.get("write_timestamp", 0)
                 remote_ts = resp.get("logical_timestamp", 0)
                 if remote_ts:
                     self._hlc.receive(remote_ts)
                 self._writes_completed += 1
-                return
+                return write_ts or remote_ts or ts
 
             if resp.get("type") == MessageType.PAUSED_ERR.value:
                 await asyncio.sleep(_PAUSED_RETRY_DELAY_S)
@@ -469,6 +519,7 @@ class NodeWorkload:
                 block_id=row.block_id,
                 data=row.data,
                 amount=row.amount,
+                debit_ts=row.debit_ts,
                 attempts=row.attempts,
             )
             self._pending_effects[pending.dep_tag] = pending
@@ -498,6 +549,7 @@ class NodeWorkload:
                 block_id=pending.block_id,
                 data=pending.data,
                 amount=pending.amount,
+                debit_ts=pending.debit_ts,
                 attempts=pending.attempts,
             )
         )

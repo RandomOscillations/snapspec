@@ -569,7 +569,13 @@ class StorageNode:
             if "balance_delta" in msg:
                 self._balance += msg["balance_delta"]
 
-        await self._send(writer, MessageType.WRITE_ACK, ts, block_id=block_id)
+        await self._send(
+            writer,
+            MessageType.WRITE_ACK,
+            ts,
+            block_id=block_id,
+            write_timestamp=node_ts,
+        )
         if self.total_writes <= 3 or self.total_writes % 500 == 0:
             log_event(
                 logger,
@@ -701,7 +707,10 @@ class StorageNode:
         """Drain the co-located workload's in-flight cross-node transfers."""
         ts = msg["logical_timestamp"]
         if self._local_workload is not None:
-            await self._local_workload.drain()
+            if msg.get("stop_all", False):
+                await self._local_workload.pause_all()
+            else:
+                await self._local_workload.drain()
         await self._send(writer, MessageType.WORKLOAD_DRAINED, ts)
 
     async def _handle_resume_workload(self, msg: dict, writer: asyncio.StreamWriter):
@@ -822,6 +831,13 @@ class StorageNode:
         """Reset node to initial state — used between strategy runs."""
         ts = msg["logical_timestamp"]
         new_balance = msg.get("balance", 0)
+
+        resume_workload = msg.get("resume_workload", True)
+        if self._local_workload is not None:
+            await self._local_workload.reset_for_experiment(
+                new_balance,
+                restart=resume_workload,
+            )
 
         async with self._state_lock:
             # Discard any active snapshot

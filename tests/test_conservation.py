@@ -129,3 +129,46 @@ class TestConservation:
         result = validate_conservation(balances, logs, amounts, TOTAL)
         assert not result.valid  # conservation violated
         assert result.observed_total == 1_001_000
+
+    def test_pending_outbox_pre_snap_debit_counts_in_transit(self):
+        """A pending credit with no post-snapshot CAUSE means the debit is in the cut."""
+        balances = [499_000, 500_000]
+        pending = {
+            42: {
+                "source_node_id": 0,
+                "dest_node_id": 1,
+                "amount": 1000,
+            }
+        }
+        result = validate_conservation(
+            balances,
+            [[], []],
+            {42: 1000},
+            TOTAL,
+            pending_transfers=pending,
+        )
+        assert result.valid
+        assert result.in_transit_total == 1000
+
+    def test_pending_outbox_post_snap_debit_not_in_transit(self):
+        """A pending credit with post-snapshot CAUSE has not affected the snapshot cut."""
+        balances = [500_000, 500_000]
+        logs = [[_entry(tag=42, role="CAUSE")], []]
+        pending = {
+            42: {
+                "source_node_id": 0,
+                "dest_node_id": 1,
+                "amount": 1000,
+                "debit_ts": 20,
+            }
+        }
+        result = validate_conservation(
+            balances,
+            logs,
+            {42: 1000},
+            TOTAL,
+            pending_transfers=pending,
+            snapshot_ts=10,
+        )
+        assert result.valid
+        assert result.in_transit_total == 0

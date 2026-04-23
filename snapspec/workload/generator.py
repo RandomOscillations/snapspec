@@ -45,6 +45,7 @@ class PendingTransfer:
     block_id: int
     data: bytes
     amount: int
+    debit_ts: int = 0
     attempts: int = 0
     next_retry_at: float = 0.0
 
@@ -120,6 +121,7 @@ class WorkloadGenerator:
                 "source_node_id": pending.source,
                 "dest_node_id": pending.dest,
                 "attempts": pending.attempts,
+                "debit_ts": pending.debit_ts,
             }
             for tag, pending in self._pending_effects.items()
         }
@@ -307,12 +309,11 @@ class WorkloadGenerator:
 
             self._transfer_amounts[dep_tag] = amount
 
-            debit_ts = self._hlc.tick()
-            await self._send_write_with_retry(
+            debit_ts = await self._send_write_with_retry(
                 source,
                 block_id,
                 data,
-                debit_ts,
+                self._hlc.tick(),
                 dep_tag=dep_tag,
                 role="CAUSE",
                 partner=dest,
@@ -328,6 +329,7 @@ class WorkloadGenerator:
                 block_id=block_id,
                 data=data,
                 amount=amount,
+                debit_ts=debit_ts,
             )
             await self._persist_pending_effect(self._pending_effects[dep_tag])
             log_event(
@@ -454,7 +456,7 @@ class WorkloadGenerator:
         role: str,
         partner: int,
         balance_delta: int,
-    ):
+    ) -> int:
         """Send a write, retrying on PAUSED_ERR."""
         data_b64 = base64.b64encode(data).decode("ascii")
         conn = self._connections[node_id]
@@ -479,6 +481,7 @@ class WorkloadGenerator:
                 # Merge HLC with the node's response timestamp.
                 # This ensures the next write's timestamp is causally after
                 # this ACK — critical for EFFECT being > CAUSE in transfers.
+                write_ts = resp.get("write_timestamp", 0)
                 remote_ts = resp.get("logical_timestamp", 0)
                 if remote_ts:
                     self._hlc.receive(remote_ts)
@@ -495,7 +498,7 @@ class WorkloadGenerator:
                         role=role,
                         balance_delta=balance_delta,
                     )
-                return
+                return write_ts or remote_ts or ts
 
             if resp.get("type") == MessageType.PAUSED_ERR.value:
                 log_event(
@@ -545,6 +548,7 @@ class WorkloadGenerator:
                 block_id=row.block_id,
                 data=row.data,
                 amount=row.amount,
+                debit_ts=row.debit_ts,
                 attempts=row.attempts,
             )
             self._pending_effects[pending.dep_tag] = pending
@@ -575,6 +579,7 @@ class WorkloadGenerator:
                 block_id=pending.block_id,
                 data=pending.data,
                 amount=pending.amount,
+                debit_ts=pending.debit_ts,
                 attempts=pending.attempts,
             )
         )

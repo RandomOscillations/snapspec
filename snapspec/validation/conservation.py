@@ -37,6 +37,7 @@ def validate_conservation(
     expected_total: int,
     participating_node_ids: set[int] | None = None,
     pending_transfers: dict[int, dict] | None = None,
+    snapshot_ts: int | None = None,
 ) -> ConservationResult:
     """Validate token conservation across a snapshot.
 
@@ -91,12 +92,13 @@ def validate_conservation(
             in_transit_tags.append(tag)
             counted_tags.add(tag)
 
-    # Outbox-backed transfers cover the failure case where the debit reached
-    # the source node, but the credit has not yet reached the destination node.
-    # If the debit is already in the snapshot and the credit is still pending,
-    # those tokens are in transit even when the destination node is unavailable
-    # and therefore cannot contribute an EFFECT write-log entry.
-    for tag, pending in (pending_transfers or {}).items():
+    # Outbox-backed transfers are "credit not ACKed by the source", not proof
+    # that the destination did not apply the credit. Count them only to explain
+    # an observed deficit that remains after log-derived in-transit accounting.
+    pending_deficit = expected_total - balance_sum - in_transit_total
+    for tag, pending in sorted((pending_transfers or {}).items()):
+        if pending_deficit <= 0:
+            break
         if tag in skipped_tags or tag in counted_tags:
             continue
         source_node_id = pending.get("source_node_id")
@@ -105,18 +107,26 @@ def validate_conservation(
             continue
 
         post_roles = tag_to_post_roles.get(tag, set())
-        # Only skip if EFFECT is in the log — that means the credit landed.
-        # If only CAUSE is in the log but the transfer is still pending,
-        # the tokens are in-transit (destination node may be down).
-        if "EFFECT" in post_roles:
+        # Count only when the debit is in the snapshot. If CAUSE is post-snapshot,
+        # the source snapshot balance still includes the tokens, so a pending
+        # credit is not in-transit for this snapshot cut.
+        debit_ts = int(pending.get("debit_ts", 0))
+        if (
+            "CAUSE" in post_roles
+            or "EFFECT" in post_roles
+            or (snapshot_ts is not None and debit_ts > snapshot_ts)
+        ):
             continue
 
         amount = int(pending.get("amount", transfer_amounts.get(tag, 0)))
         if amount <= 0:
             continue
+        if amount > pending_deficit:
+            continue
         in_transit_total += amount
         in_transit_tags.append(tag)
         counted_tags.add(tag)
+        pending_deficit -= amount
 
     post_role_samples = [
         f"tag={tag}:roles={','.join(sorted(post_roles))}:amount={transfer_amounts.get(tag, 0)}"

@@ -104,6 +104,7 @@ class Coordinator:
         self._hlc = HybridLogicalClock()
         self._snapshot_counter: int = 0
         self._message_counter: int = 0  # control messages sent per snapshot
+        self._had_node_failure: bool = False  # set if any node was ever unhealthy
 
         # Snapshot loop control
         self._running = False
@@ -459,20 +460,21 @@ class Coordinator:
         """
         if self._workload is not None:
             await self._workload.drain()
-        # Drain remote nodes' workloads too
-        if self._connections:
+        # Drain remote nodes' workloads — only healthy nodes
+        healthy = self.get_snapshot_participants()
+        if healthy:
             ts = self.tick()
-            await self.send_all(MessageType.DRAIN_WORKLOAD.value, ts)
+            await self.send_all(MessageType.DRAIN_WORKLOAD.value, ts, node_ids=healthy)
 
     def resume_workload(self) -> None:
-        """Re-enable cross-node transfers on ALL nodes' workloads."""
+        """Re-enable cross-node transfers on healthy nodes' workloads."""
         if self._workload is not None:
             self._workload.resume_transfers()
-        # Resume remote nodes' workloads too
-        if self._connections:
+        healthy = self.get_snapshot_participants()
+        if healthy:
             ts = self.tick()
             asyncio.ensure_future(
-                self.send_all(MessageType.RESUME_WORKLOAD.value, ts)
+                self.send_all(MessageType.RESUME_WORKLOAD.value, ts, node_ids=healthy)
             )
 
     async def run(self, duration_s: float):
@@ -496,7 +498,7 @@ class Coordinator:
         start = time.monotonic()
         while self._running and (time.monotonic() - start) < duration_s:
             await asyncio.sleep(self.snapshot_interval_s)
-            if not self._running:
+            if not self._running or (time.monotonic() - start) >= duration_s:
                 break
             try:
                 self._active_snapshot_task = asyncio.create_task(self.trigger_snapshot())
@@ -836,6 +838,7 @@ class Coordinator:
         )
         was_healthy = bool(state.get("healthy"))
         state["healthy"] = False
+        self._had_node_failure = True
         state["last_check_at"] = now
         state["last_error"] = reason
         self._capture_workload_balance_estimate(node_id)

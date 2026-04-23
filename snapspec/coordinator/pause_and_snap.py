@@ -110,8 +110,8 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     conservation_ok: bool | None = None
     balance_sum: int | None = None
     in_transit_total: int | None = None
-    all_nodes_present = len(responding_node_ids) == len(coordinator.connections)
-    if coordinator.expected_total > 0 and all_nodes_present:
+    can_check_conservation = not getattr(coordinator, '_had_node_failure', False)
+    if coordinator.expected_total > 0 and can_check_conservation:
         adjusted_expected_total = coordinator.expected_total_for_participants(
             responding_node_ids
         )
@@ -122,12 +122,13 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             adjusted_expected_total,
             participating_node_ids=set(responding_node_ids),
             pending_transfers=coordinator.pending_transfer_records,
+            snapshot_ts=ts,
         )
         conservation_ok = cons.valid
         balance_sum = cons.balance_sum
         in_transit_total = cons.in_transit_total
         if not cons.valid:
-            logger.warning(
+            logger.debug(
                 "Pause-and-snap conservation failed at ts=%d: %s | balances=%s | in_transit_tags=%s | post_roles=%s",
                 ts,
                 cons.detail,

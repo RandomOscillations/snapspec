@@ -44,7 +44,9 @@ from snapspec.workload.node_workload import NodeWorkload
 
 logger = logging.getLogger(__name__)
 
-STRATEGIES = ["pause_and_snap", "two_phase", "speculative"]
+# Demo-safe default for `strategies: all`. Speculative remains available via
+# `--strategy speculative`, but is not part of the default live demo path.
+STRATEGIES = ["pause_and_snap", "two_phase"]
 
 
 def load_config(path: str) -> dict:
@@ -126,11 +128,38 @@ async def reset_nodes(node_configs: list[dict], balances: list[int]):
             )
             await conn.connect()
             await conn.send_and_receive(
-                MessageType.RESET, 0, balance=balances[cfg["node_id"]],
+                MessageType.DRAIN_WORKLOAD, 0, stop_all=True,
+            )
+            await conn.close()
+        except (ConnectionRefusedError, OSError, asyncio.TimeoutError):
+            print(f"  Warning: Node {cfg['node_id']} unreachable during workload drain (skipping)")
+
+    for cfg in node_configs:
+        try:
+            conn = NodeConnection(
+                node_id=cfg["node_id"], host=cfg["host"], port=cfg["port"],
+            )
+            await conn.connect()
+            await conn.send_and_receive(
+                MessageType.RESET,
+                0,
+                balance=balances[cfg["node_id"]],
+                resume_workload=False,
             )
             await conn.close()
         except (ConnectionRefusedError, OSError, asyncio.TimeoutError):
             print(f"  Warning: Node {cfg['node_id']} unreachable during reset (skipping)")
+
+    for cfg in node_configs:
+        try:
+            conn = NodeConnection(
+                node_id=cfg["node_id"], host=cfg["host"], port=cfg["port"],
+            )
+            await conn.connect()
+            await conn.send_and_receive(MessageType.RESUME_WORKLOAD, 0)
+            await conn.close()
+        except (ConnectionRefusedError, OSError, asyncio.TimeoutError):
+            print(f"  Warning: Node {cfg['node_id']} unreachable during workload resume (skipping)")
 
 
 async def restore_global_snapshot(node_configs: list[dict], snapshot_ts: int) -> bool:
@@ -203,15 +232,31 @@ async def run_strategy(
     await coordinator.start()
 
     coordinator._running = True
+    duration_s = exp_cfg["duration_s"]
     snap_task = asyncio.create_task(
-        coordinator._snapshot_loop(exp_cfg["duration_s"])
+        coordinator._snapshot_loop(duration_s)
     )
+    coordinator._snapshot_task = snap_task
     try:
-        await snap_task
+        hard_timeout_s = duration_s + max(
+            exp_cfg["snapshot_interval_s"] * 2,
+            coordinator.operation_timeout_s * 4,
+            coordinator.shutdown_timeout_s,
+        )
+        await asyncio.wait_for(snap_task, timeout=hard_timeout_s)
+    except asyncio.TimeoutError:
+        print(f"\n  WARNING: {strategy_name} exceeded {hard_timeout_s:.1f}s; stopping it.")
+        coordinator._running = False
     except asyncio.CancelledError:
         pass
 
-    await coordinator.stop()
+    try:
+        await asyncio.wait_for(
+            coordinator.stop(),
+            timeout=coordinator.shutdown_timeout_s + coordinator.operation_timeout_s + 1,
+        )
+    except asyncio.TimeoutError:
+        print(f"\n  WARNING: {strategy_name} coordinator cleanup timed out.")
 
     summary = metrics.compute_summary()
     summary["strategy"] = strategy_name
@@ -426,8 +471,10 @@ async def run_node(config: dict, node_id: int, node_only: bool = False,
                 await workload.start()
 
             print(f"  [{strategy}] running for {duration}s...", end="", flush=True)
+            strategy_exp_cfg = dict(exp_cfg)
+            strategy_exp_cfg["duration_s"] = duration
             summary, csv_path = await run_strategy(
-                strategy, node_configs, config, wl_cfg, exp_cfg,
+                strategy, node_configs, config, wl_cfg, strategy_exp_cfg,
             )
             results[strategy] = summary
             csv_paths.append(csv_path)
