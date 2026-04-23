@@ -192,7 +192,15 @@ def print_results_table(results: dict):
         ("avg_retry_rate", "Avg retries/snapshot"),
         ("p50_latency_ms", "p50 latency (ms)"),
         ("p99_latency_ms", "p99 latency (ms)"),
+        ("avg_convergence_ms", "Avg convergence (ms)"),
+        ("avg_balance_sum", "Avg balance sum"),
+        ("avg_in_transit", "Avg in-transit tokens"),
+        ("avg_messages_per_snapshot", "Avg msgs/snapshot"),
+        ("total_control_messages", "Total control msgs"),
     ]
+
+    pct_keys = {"rate", "consistency", "validity", "verification"}
+    int_keys = {"avg_balance_sum", "avg_in_transit", "total_control_messages", "avg_messages_per_snapshot"}
 
     col_w = 20
     header = f"{'Metric':<30}" + "".join(f"{s:>{col_w}}" for s in results)
@@ -205,8 +213,10 @@ def print_results_table(results: dict):
             val = results[strategy].get(key)
             if val is None or (isinstance(val, float) and val < 0):
                 row += f"{'N/A':>{col_w}}"
-            elif "rate" in key or "consistency" in key or "validity" in key or "verification" in key:
+            elif any(k in key for k in pct_keys):
                 row += f"{val:.1%}".rjust(col_w)
+            elif key in int_keys:
+                row += f"{int(val)}".rjust(col_w)
             else:
                 row += f"{val:.2f}".rjust(col_w)
         print(row)

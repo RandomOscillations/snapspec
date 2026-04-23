@@ -29,6 +29,11 @@ class SnapshotResult:
     recovery_verified: bool | None = None       # None = not checked
     recovery_balance_sum: int | None = None
     recovery_conservation_holds: bool | None = None
+    # Quantitative metrics (Test 4)
+    convergence_ms: float | None = None         # time for all nodes to respond to SNAP/PREPARE
+    balance_sum: int | None = None              # sum of snapshot-time balances
+    in_transit_total: int | None = None          # tokens in-flight at snapshot time
+    message_count: int | None = None            # control messages used for this snapshot
 
 
 class CoordinatorProtocol(Protocol):

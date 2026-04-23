@@ -20,6 +20,7 @@ the "discard is free" claim.
 from __future__ import annotations
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING
 
 from .strategy_interface import SnapshotResult
@@ -66,14 +67,18 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             failure_reason="insufficient_healthy_nodes",
         )
 
+    coordinator.reset_message_counter()
+
     for attempt in range(max_retries + 1):
         # Fresh timestamp for retries (first attempt reuses ts)
         attempt_ts = ts if attempt == 0 else coordinator.tick()
 
         # Step 1: Snap all nodes — no pause, no prepare
+        convergence_start = time.monotonic()
         responses = await coordinator.send_all(
             _SNAP_NOW, attempt_ts, node_ids=participant_node_ids, snapshot_ts=attempt_ts
         )
+        convergence_ms = (time.monotonic() - convergence_start) * 1000
         if not all(r is not None and r.get("type") == _SNAPPED for r in responses):
             # Snap failed on some node — abort this attempt
             await coordinator.send_all(_ABORT, attempt_ts, node_ids=participant_node_ids)
@@ -136,6 +141,8 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
 
             # Conservation check on committed snapshot
             conservation_ok: bool | None = None
+            balance_sum: int | None = None
+            in_transit_total: int | None = None
             if coordinator.expected_total > 0:
                 adjusted_expected_total = coordinator.expected_total_for_participants(
                     responding_node_ids
@@ -149,6 +156,8 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                     pending_transfers=coordinator.pending_transfer_records,
                 )
                 conservation_ok = cons.valid
+                balance_sum = cons.balance_sum
+                in_transit_total = cons.in_transit_total
                 if not cons.valid:
                     logger.warning(
                         "Speculative conservation failed at ts=%d attempt=%d: %s | balances=%s | in_transit_tags=%s | post_roles=%s",
@@ -184,6 +193,10 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                 recovery_verified=recovery_verified,
                 recovery_balance_sum=recovery_balance_sum,
                 recovery_conservation_holds=recovery_conservation,
+                convergence_ms=convergence_ms,
+                balance_sum=balance_sum,
+                in_transit_total=in_transit_total,
+                message_count=coordinator.reset_message_counter(),
             )
 
         # Step 4b: Inconsistent — abort

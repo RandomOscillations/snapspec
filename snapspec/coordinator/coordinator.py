@@ -103,6 +103,7 @@ class Coordinator:
         # Hybrid Logical Clock and snapshot counter
         self._hlc = HybridLogicalClock()
         self._snapshot_counter: int = 0
+        self._message_counter: int = 0  # control messages sent per snapshot
 
         # Snapshot loop control
         self._running = False
@@ -141,6 +142,7 @@ class Coordinator:
 
         mt = MessageType(msg_type)
         connections = self._select_connections(node_ids)
+        self._message_counter += len(connections)  # count outgoing messages
         results = await asyncio.gather(
             *[
                 self._send_with_timeout(
@@ -149,7 +151,14 @@ class Coordinator:
                 for c in connections
             ]
         )
+        self._message_counter += sum(1 for r in results if r is not None)  # count responses
         return list(results)
+
+    def reset_message_counter(self) -> int:
+        """Reset and return the message count (call before each snapshot)."""
+        count = self._message_counter
+        self._message_counter = 0
+        return count
 
     async def collect_write_logs_parallel(
         self, ts: int, node_ids: list[int] | None = None

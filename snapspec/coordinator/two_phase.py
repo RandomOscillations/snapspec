@@ -23,6 +23,7 @@ Brief pause at commit time: one RTT for COMMIT + ACK.
 from __future__ import annotations
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING
 
 from .strategy_interface import SnapshotResult
@@ -61,10 +62,14 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             failure_reason="insufficient_healthy_nodes",
         )
 
+    coordinator.reset_message_counter()
+
     # Phase 1: Prepare — all nodes take a snapshot, writes continue to delta
+    convergence_start = time.monotonic()
     responses = await coordinator.send_all(
         _PREPARE, ts, node_ids=participant_node_ids, snapshot_ts=ts
     )
+    convergence_ms = (time.monotonic() - convergence_start) * 1000
     if not all(r is not None and r.get("type") == _READY for r in responses):
         # Some node failed to prepare — abort all
         await coordinator.send_all(_ABORT, ts, node_ids=participant_node_ids)
@@ -116,6 +121,8 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
 
         # Conservation check (only meaningful on committed snapshots)
         conservation_ok: bool | None = None
+        balance_sum: int | None = None
+        in_transit_total: int | None = None
         if coordinator.expected_total > 0:
             adjusted_expected_total = coordinator.expected_total_for_participants(
                 responding_node_ids
@@ -129,6 +136,8 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                 pending_transfers=coordinator.pending_transfer_records,
             )
             conservation_ok = cons.valid
+            balance_sum = cons.balance_sum
+            in_transit_total = cons.in_transit_total
             if not cons.valid:
                 logger.warning(
                     "Two-phase conservation failed at ts=%d: %s | balances=%s | in_transit_tags=%s | post_roles=%s",
@@ -160,6 +169,10 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             conservation_holds=conservation_ok,
             recovery_verified=recovery_verified,
             recovery_balance_sum=recovery_balance_sum,
+            convergence_ms=convergence_ms,
+            balance_sum=balance_sum,
+            in_transit_total=in_transit_total,
+            message_count=coordinator.reset_message_counter(),
             recovery_conservation_holds=recovery_conservation,
         )
     else:

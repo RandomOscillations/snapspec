@@ -15,6 +15,7 @@ This is the simplest strategy and should be implemented/tested first.
 
 from __future__ import annotations
 import logging
+import time
 from typing import TYPE_CHECKING
 
 from .strategy_interface import SnapshotResult
@@ -55,6 +56,8 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             failure_reason="insufficient_healthy_nodes",
         )
 
+    coordinator.reset_message_counter()
+
     # Phase 0: Drain in-flight transfers in the workload generator.
     # Without this, a cross-node transfer can be split by PAUSE: the debit
     # is ACK'd but the credit is blocked by PAUSED_ERR — conservation violation.
@@ -73,9 +76,11 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
         )
 
     # Phase 2: Take snapshot on all nodes (writes are paused, so this is safe)
+    snap_start = time.monotonic()
     responses = await coordinator.send_all(
         _SNAP_NOW, ts, node_ids=participant_node_ids, snapshot_ts=ts
     )
+    convergence_ms = (time.monotonic() - snap_start) * 1000
     if not _all_responded_with(responses, _SNAPPED):
         # Snapshot failed on some node — resume and abort
         coordinator.resume_workload()
@@ -103,12 +108,12 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
         )
 
     conservation_ok: bool | None = None
+    balance_sum: int | None = None
+    in_transit_total: int | None = None
     if coordinator.expected_total > 0:
         adjusted_expected_total = coordinator.expected_total_for_participants(
             responding_node_ids
         )
-        # Logs should be empty (writes paused after drain), but pass them
-        # for defense-in-depth: in-transit detection can still catch edge cases.
         cons = validate_conservation(
             snapshot_balances,
             all_logs,
@@ -118,6 +123,8 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             pending_transfers=coordinator.pending_transfer_records,
         )
         conservation_ok = cons.valid
+        balance_sum = cons.balance_sum
+        in_transit_total = cons.in_transit_total
         if not cons.valid:
             logger.warning(
                 "Pause-and-snap conservation failed at ts=%d: %s | balances=%s | in_transit_tags=%s | post_roles=%s",
@@ -162,6 +169,10 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
         recovery_verified=recovery_verified,
         recovery_balance_sum=recovery_balance_sum,
         recovery_conservation_holds=recovery_conservation,
+        convergence_ms=convergence_ms,
+        balance_sum=balance_sum,
+        in_transit_total=in_transit_total,
+        message_count=coordinator.reset_message_counter(),
     )
 
 

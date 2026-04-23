@@ -47,6 +47,10 @@ class _SnapshotRecord:
     conservation_holds: bool | None
     recovery_verified: bool | None = None
     recovery_conservation_holds: bool | None = None
+    convergence_ms: float | None = None
+    balance_sum: int | None = None
+    in_transit_total: int | None = None
+    message_count: int | None = None
 
 
 @dataclass
@@ -111,6 +115,10 @@ class MetricsCollector:
             conservation_holds=result.conservation_holds,
             recovery_verified=result.recovery_verified,
             recovery_conservation_holds=result.recovery_conservation_holds,
+            convergence_ms=result.convergence_ms,
+            balance_sum=result.balance_sum,
+            in_transit_total=result.in_transit_total,
+            message_count=result.message_count,
         ))
 
     def snapshot_counts(self) -> dict[str, int]:
@@ -329,6 +337,34 @@ class MetricsCollector:
             summary["recovery_rate"] = None
             summary["recovery_checked_count"] = 0.0
             summary["recovery_conservation_rate"] = None
+
+        # Quantitative metrics (Test 4)
+        committed_snaps = [s for s in considered if s.success]
+        if committed_snaps:
+            conv_times = [s.convergence_ms for s in committed_snaps if s.convergence_ms is not None]
+            if conv_times:
+                summary["avg_convergence_ms"] = sum(conv_times) / len(conv_times)
+            else:
+                summary["avg_convergence_ms"] = 0.0
+
+            bal_sums = [s.balance_sum for s in committed_snaps if s.balance_sum is not None]
+            in_transits = [s.in_transit_total for s in committed_snaps if s.in_transit_total is not None]
+            summary["avg_balance_sum"] = sum(bal_sums) / len(bal_sums) if bal_sums else 0.0
+            summary["avg_in_transit"] = sum(in_transits) / len(in_transits) if in_transits else 0.0
+
+            msg_counts = [s.message_count for s in committed_snaps if s.message_count is not None]
+            if msg_counts:
+                summary["avg_messages_per_snapshot"] = sum(msg_counts) / len(msg_counts)
+                summary["total_control_messages"] = sum(msg_counts)
+            else:
+                summary["avg_messages_per_snapshot"] = 0.0
+                summary["total_control_messages"] = 0.0
+        else:
+            summary["avg_convergence_ms"] = 0.0
+            summary["avg_balance_sum"] = 0.0
+            summary["avg_in_transit"] = 0.0
+            summary["avg_messages_per_snapshot"] = 0.0
+            summary["total_control_messages"] = 0.0
 
         return summary
 
