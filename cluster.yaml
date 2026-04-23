@@ -10,13 +10,13 @@
 
 nodes:
   - id: 0
-    host: "192.168.1.10"    # Machine A (coordinator + node)
+    host: "10.136.33.50"    # Machine A (coordinator + node)
     port: 9000
   - id: 1
-    host: "192.168.1.11"    # Machine B
+    host: "10.76.2.36"    # Machine B
     port: 9000
   - id: 2
-    host: "192.168.1.12"    # Machine C
+    host: "10.136.33.48"    # Machine C
     port: 9000
 
 coordinator_node: 0          # Which node also runs the coordinator
