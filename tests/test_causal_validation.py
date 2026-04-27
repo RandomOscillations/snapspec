@@ -77,17 +77,16 @@ class TestCausalValidation:
         assert violations[0].present_role == "CAUSE"
         assert violations[0].missing_role == "EFFECT"
 
-    def test_only_effect_in_log_inconsistent(self):
+    def test_only_effect_in_log_consistent_in_transit(self):
         """EFFECT in log (credit post-snap) but CAUSE not in log (debit pre-snap).
-        Snapshot has debit without credit → tokens vanished."""
+        Snapshot has debit without credit because the transfer is in transit."""
         logs = [
             [],                                              # debit pre-snap (in snapshot)
             [_entry(tag=1001, role="EFFECT", partner=0)],    # credit post-snap
         ]
         result, violations = validate_causal(logs)
-        assert result == ValidationResult.INCONSISTENT
-        assert len(violations) == 1
-        assert violations[0].present_role == "EFFECT"
+        assert result == ValidationResult.CONSISTENT
+        assert violations == []
 
     def test_multiple_transfers_mixed(self):
         """Multiple transfers: some consistent, some not."""

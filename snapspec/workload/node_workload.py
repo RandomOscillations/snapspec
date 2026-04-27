@@ -100,6 +100,7 @@ class NodeWorkload:
         self._transfer_amounts: dict[int, int] = {}
         self._pending_effects: dict[int, PendingTransfer] = {}
         self._dep_tag_counter = node_id * 1_000_000
+        self._epoch = 0
 
         self._writes_completed = 0
         self._running = False
@@ -136,19 +137,25 @@ class NodeWorkload:
 
     async def start(self):
         """Connect to local/remote nodes and start the write loop."""
+        if self._running:
+            return
+
         if self._pending_outbox is not None:
             await self._pending_outbox.start()
             await self._pending_outbox.register_run(self._outbox_run_id)
             await self._load_pending_effects_from_outbox()
 
-        self._local_conn = NodeConnection(
-            node_id=self.node_id,
-            host="127.0.0.1",
-            port=self._local_port,
-        )
-        await self._connect_with_retry(self._local_conn)
+        if self._local_conn is None:
+            self._local_conn = NodeConnection(
+                node_id=self.node_id,
+                host="127.0.0.1",
+                port=self._local_port,
+            )
+            await self._connect_with_retry(self._local_conn)
 
         for cfg in self._remote_nodes:
+            if cfg["node_id"] in self._remote_conns:
+                continue
             conn = NodeConnection(
                 node_id=cfg["node_id"],
                 host=cfg["host"],
@@ -251,7 +258,12 @@ class NodeWorkload:
         """Reset the workload's source-balance estimate after node restore."""
         self._local_balance = balance
 
-    async def reset_for_experiment(self, balance: int, restart: bool = True):
+    async def reset_for_experiment(
+        self,
+        balance: int,
+        restart: bool = True,
+        start_if_never_started: bool = False,
+    ):
         """Reset workload-side token metadata at an experiment boundary."""
         was_running = self._running
         await self.pause_all()
@@ -263,13 +275,20 @@ class NodeWorkload:
         self._local_balance = balance
         self._transfer_amounts.clear()
         self._dep_tag_counter = self.node_id * 1_000_000
+        self._epoch += 1
         self._writes_completed = 0
         self._transfer_idle.set()
 
-        if was_running and restart:
-            self._running = True
-            self._draining = False
-            self._task = asyncio.create_task(self._run_loop())
+        if restart:
+            if self._local_conn is None:
+                if start_if_never_started:
+                    await self.start()
+            elif was_running:
+                self._running = True
+                self._draining = False
+                self._task = asyncio.create_task(self._run_loop())
+            else:
+                self.resume_transfers()
 
     async def clear_pending_effects(self):
         """Drop source-owned pending effects after a coordinated global rollback.
@@ -494,6 +513,7 @@ class NodeWorkload:
                 partner=partner,
                 balance_delta=balance_delta,
                 write_id=write_id,
+                workload_epoch=self._epoch,
             )
 
             if resp is None:

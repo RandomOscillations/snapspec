@@ -152,6 +152,28 @@ class TestConservation:
         assert result.valid
         assert result.in_transit_total == 1000
 
+    def test_pending_outbox_debit_timestamp_after_snapshot_still_counts_by_log_membership(self):
+        """HLC debit_ts can be greater than snapshot_ts even when CAUSE is pre-cut."""
+        balances = [499_000, 500_000]
+        pending = {
+            42: {
+                "source_node_id": 0,
+                "dest_node_id": 1,
+                "amount": 1000,
+                "debit_ts": 20,
+            }
+        }
+        result = validate_conservation(
+            balances,
+            [[], []],
+            {42: 1000},
+            TOTAL,
+            pending_transfers=pending,
+            snapshot_ts=10,
+        )
+        assert result.valid
+        assert result.in_transit_total == 1000
+
     def test_pending_outbox_without_debit_timestamp_is_not_in_transit(self):
         balances = [499_000, 500_000]
         pending = {

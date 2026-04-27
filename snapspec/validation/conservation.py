@@ -107,15 +107,17 @@ def validate_conservation(
             continue
 
         post_roles = tag_to_post_roles.get(tag, set())
-        # Count only when the debit is in the snapshot. If CAUSE is post-snapshot,
-        # the source snapshot balance still includes the tokens, so a pending
-        # credit is not in-transit for this snapshot cut.
+        # Count only when the debit is in the snapshot. Log membership is the
+        # source of truth for this cut: if CAUSE is post-snapshot it appears in
+        # post_roles, otherwise the debit is part of the snapshot balance. The
+        # debit_ts only proves that the source debit happened at all; it is not
+        # reliable for ordering against the coordinator's snapshot timestamp
+        # because node/workload HLCs may already be ahead under network delay.
         debit_ts = int(pending.get("debit_ts", 0))
         if (
             debit_ts <= 0
             or "CAUSE" in post_roles
             or "EFFECT" in post_roles
-            or (snapshot_ts is not None and debit_ts > snapshot_ts)
         ):
             continue
 

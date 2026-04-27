@@ -52,6 +52,18 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
+def fmt_pct(value, default: str = "N/A") -> str:
+    if value is None or (isinstance(value, float) and value < 0):
+        return default
+    return f"{float(value):.1%}"
+
+
+def fmt_float(value, suffix: str = "", default: str = "N/A") -> str:
+    if value is None or (isinstance(value, float) and value < 0):
+        return default
+    return f"{float(value):.2f}{suffix}"
+
+
 def get_local_ip() -> str:
     """Best-effort detection of the machine's LAN IP."""
     try:
@@ -116,6 +128,34 @@ async def wait_for_nodes(node_configs: list[dict], timeout: float = 60.0):
                 break
             except (ConnectionRefusedError, OSError, asyncio.TimeoutError):
                 await asyncio.sleep(0.5)
+
+
+async def wait_for_workloads_registered(
+    node_configs: list[dict],
+    timeout: float = 60.0,
+):
+    """Wait until every node has registered its co-located workload object."""
+    start = time.monotonic()
+    pending = {cfg["node_id"] for cfg in node_configs}
+    while pending:
+        elapsed = time.monotonic() - start
+        if elapsed > timeout:
+            raise TimeoutError(
+                f"Workloads not registered after {timeout:.0f}s: {sorted(pending)}"
+            )
+        responses = await asyncio.gather(*[
+            _node_rpc(cfg, MessageType.GET_WORKLOAD_STATS)
+            for cfg in node_configs
+        ])
+        for cfg, resp in zip(node_configs, responses):
+            if (
+                resp is not None
+                and resp.get("type") == MessageType.WORKLOAD_STATS.value
+                and resp.get("workload_registered", False)
+            ):
+                pending.discard(cfg["node_id"])
+        if pending:
+            await asyncio.sleep(0.2)
 
 
 async def reset_nodes(node_configs: list[dict], balances: list[int]):
@@ -288,6 +328,15 @@ async def run_strategy(
         snapshot_interval_s=exp_cfg["snapshot_interval_s"],
         on_snapshot_complete=metrics.on_snapshot_complete,
         total_blocks_per_node=wl_cfg["total_blocks"],
+        speculative_max_retries=int(exp_cfg.get("speculative_max_retries", 5)),
+        operation_timeout_s=float(exp_cfg.get("operation_timeout_s", 5.0)),
+        validation_timeout_s=float(exp_cfg.get("validation_timeout_s", 5.0)),
+        validation_grace_s=float(
+            exp_cfg.get(
+                "validation_grace_s",
+                float(exp_cfg.get("validation_delay_ms", 0.0)) / 1000.0,
+            )
+        ),
         health_check_interval_s=1.0,
         health_check_timeout_s=0.5,
         health_unhealthy_after_s=3.0,
@@ -508,22 +557,21 @@ async def run_node(config: dict, node_id: int, node_only: bool = False,
             outbox_run_id=outbox_run_id,
         )
 
-    if is_coordinator:
-        # Reset all nodes
-        balances = [per_node] * num_nodes
-        balances[0] += total_tokens - per_node * num_nodes
-        print(f"Resetting all nodes (balance per node: {per_node})...")
-        await reset_nodes(node_configs, balances)
-        workload = _make_workload(balances[node_id])
-    else:
-        wl_balance = node._balance if recover else per_node
-        workload = _make_workload(wl_balance)
+    balances = [per_node] * num_nodes
+    balances[0] += total_tokens - per_node * num_nodes
+    wl_balance = node._balance if recover else balances[node_id]
+    workload = _make_workload(wl_balance)
 
     node.set_transfer_amounts(workload._transfer_amounts)
     node.set_workload(workload)
-    await workload.start()
-    print(f"Workload started: {wl_cfg.get('write_rate', 200)} writes/s, "
-          f"{wl_cfg.get('cross_node_ratio', 0.2):.0%} cross-node\n")
+    if is_coordinator:
+        await wait_for_workloads_registered(node_configs)
+        print(f"Resetting all nodes (balance per node: {per_node})...")
+        await reset_nodes(node_configs, balances)
+        print(f"Workload started: {wl_cfg.get('write_rate', 200)} writes/s, "
+              f"{wl_cfg.get('cross_node_ratio', 0.2):.0%} cross-node\n")
+    else:
+        print("Workload registered; waiting for coordinator reset barrier.\n")
 
     if is_coordinator:
 
@@ -548,12 +596,6 @@ async def run_node(config: dict, node_id: int, node_only: bool = False,
                 # Reset between strategies
                 print(f"\n  Resetting nodes between strategies...")
                 await reset_nodes(node_configs, balances)
-                # Restart workload after reset
-                await workload.stop()
-                workload = _make_workload(balances[node_id])
-                node.set_transfer_amounts(workload._transfer_amounts)
-                node.set_workload(workload)
-                await workload.start()
 
             print(f"  [{strategy}] running for {duration}s...", end="", flush=True)
             strategy_exp_cfg = dict(exp_cfg)
@@ -588,7 +630,7 @@ async def run_node(config: dict, node_id: int, node_only: bool = False,
             print(f"    p99 latency:      {s.get('p99_latency_ms', 0):.2f} ms")
             print(f"    Throughput:       {s.get('avg_throughput_writes_sec', 0):.1f} writes/s")
             print(f"    Avg retries:      {s.get('avg_retry_rate', 0):.1f}")
-            print(f"    Restore verified: {s.get('recovery_rate', 0):.1%}")
+            print(f"    Restore verified: {fmt_pct(s.get('recovery_rate'))}")
             test_num += 1
 
         print(f"\n  Test {test_num}: Quantitative Validation")
@@ -606,10 +648,10 @@ async def run_node(config: dict, node_id: int, node_only: bool = False,
             causal = s.get("causal_consistency_rate", 0)
             conservation = s.get("conservation_validity_rate", 0)
             print(f"    [{label}]")
-            print(f"      Causal consistency:   {causal:.1%}")
-            print(f"      Conservation:         {conservation:.1%}")
+            print(f"      Causal consistency:   {fmt_pct(causal)}")
+            print(f"      Conservation:         {fmt_pct(conservation)}")
             print(f"      Audit sum:            {bal} + {transit} (in-transit) = {bal + transit} (expected: {expected})")
-            print(f"      Convergence time:     {conv:.2f} ms")
+            print(f"      Convergence time:     {fmt_float(conv, ' ms')}")
             print(f"      Messages/snapshot:    {msgs}")
             print(f"      Total control msgs:   {total_msgs}")
 

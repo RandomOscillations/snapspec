@@ -13,6 +13,11 @@ Throughput: writes literally never pause. Only cost is write logging
 (appending a small metadata entry per write) and coordinator validation work
 (which runs on the coordinator, not the nodes).
 
+For the token-transfer workload, cross-node transfer pairs are drained before
+each speculative attempt. Local writes keep running; only new cross-node pairs
+are held until the attempt commits or aborts. This avoids impossible cuts where
+a destination credit is captured without the source debit.
+
 CRITICAL: Log delta_block_count at each abort. This empirically validates
 the "discard is free" claim.
 """
@@ -73,6 +78,9 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
         # Fresh timestamp for retries (first attempt reuses ts)
         attempt_ts = ts if attempt == 0 else coordinator.tick()
 
+        # Step 0: quiesce cross-node transfer pairs only. Local writes continue.
+        await coordinator.drain_workload()
+
         # Step 1: Snap all nodes — no pause, no prepare
         convergence_start = time.monotonic()
         responses = await coordinator.send_all(
@@ -83,6 +91,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             # Snap failed on some node — abort this attempt
             await coordinator.send_all(_ABORT, attempt_ts, node_ids=participant_node_ids)
             delta_blocks_at_discard.extend(_extract_delta_blocks(responses))
+            coordinator.resume_workload()
             if attempt < max_retries:
                 await asyncio.sleep(_BACKOFF_BASE_S * (attempt + 1))
             continue
@@ -105,6 +114,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                 _ABORT, attempt_ts, node_ids=participant_node_ids
             )
             delta_blocks_at_discard.extend(_extract_delta_blocks(abort_responses))
+            coordinator.resume_workload()
             if attempt < max_retries:
                 await asyncio.sleep(_BACKOFF_BASE_S * (attempt + 1))
             continue
@@ -114,6 +124,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                 _ABORT, attempt_ts, node_ids=participant_node_ids
             )
             delta_blocks_at_discard.extend(_extract_delta_blocks(abort_responses))
+            coordinator.resume_workload()
             if attempt < max_retries:
                 await asyncio.sleep(_BACKOFF_BASE_S * (attempt + 1))
             continue
@@ -138,6 +149,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                 await coordinator.send_all(
                     _ABORT, attempt_ts, node_ids=participant_node_ids
                 )
+                coordinator.resume_workload()
                 if attempt < max_retries:
                     await asyncio.sleep(_BACKOFF_BASE_S * (attempt + 1))
                 continue
@@ -186,6 +198,8 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                 recovery_balance_sum = rv["balance_sum"]
                 recovery_conservation = rv.get("conservation_holds")
 
+            coordinator.resume_workload()
+
             return SnapshotResult(
                 success=True,
                 retries=attempt,
@@ -210,6 +224,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
         )
         attempt_deltas = _extract_delta_blocks(abort_responses)
         delta_blocks_at_discard.extend(attempt_deltas)
+        coordinator.resume_workload()
 
         # FM5: If delta is too large, skip remaining retries and fall back now
         # (delta_threshold is a fraction of total image blocks)

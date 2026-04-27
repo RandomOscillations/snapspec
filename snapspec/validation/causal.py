@@ -9,9 +9,11 @@ For each cross-node transfer (identified by dependency_tag), we check:
   - Both CAUSE and EFFECT in logs (both post-snap)  → neither in snapshot → CONSISTENT
   - Neither CAUSE nor EFFECT in logs (both pre-snap) → both in snapshot  → CONSISTENT
   - Only CAUSE in log (debit post, credit pre)       → credit without debit → INCONSISTENT
-  - Only EFFECT in log (credit post, debit pre)      → debit without credit → INCONSISTENT
+  - Only EFFECT in log (credit post, debit pre)      → transfer in transit → CONSISTENT
 
-Any asymmetry means the snapshot captured one half of a transfer but not the other.
+Only CAUSE without EFFECT is a causal violation: the snapshot includes a credit
+whose debit is not yet in the snapshot. EFFECT without CAUSE is the normal
+in-transit case and is accounted by token conservation.
 """
 
 from collections import defaultdict
@@ -89,16 +91,9 @@ def validate_causal(
                 ),
             ))
         elif roles == {"EFFECT"}:
-            # Only credit is post-snapshot → debit is in snapshot without credit
-            violations.append(CausalViolation(
-                dependency_tag=tag,
-                present_role="EFFECT",
-                missing_role="CAUSE",
-                explanation=(
-                    f"Tag {tag}: credit is post-snapshot but debit is in the snapshot. "
-                    "Snapshot shows tokens vanishing."
-                ),
-            ))
+            # Only credit is post-snapshot → debit is in snapshot and the
+            # transfer is in transit. Conservation accounts for this amount.
+            continue
         # Note: if neither role is in the logs, we never see the tag here,
         # which means both are pre-snapshot → both in snapshot → consistent.
         # This case is handled implicitly by not being in tag_to_roles.

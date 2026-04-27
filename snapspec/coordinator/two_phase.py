@@ -18,6 +18,9 @@ Write behavior during protocol:
   new state. On ABORT, the delta is merged back into the base (discarded).
 
 Brief pause at commit time: one RTT for COMMIT + ACK.
+Cross-node transfer pairs are drained before PREPARE so the snapshot does not
+capture a destination credit without the corresponding source debit. Local
+writes continue while cross-node transfers are drained.
 """
 
 from __future__ import annotations
@@ -64,6 +67,9 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
 
     coordinator.reset_message_counter()
 
+    # Phase 0: quiesce cross-node transfer pairs only. Local writes continue.
+    await coordinator.drain_workload()
+
     # Phase 1: Prepare — all nodes take a snapshot, writes continue to delta
     convergence_start = time.monotonic()
     responses = await coordinator.send_all(
@@ -73,6 +79,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     if not all(r is not None and r.get("type") == _READY for r in responses):
         # Some node failed to prepare — abort all
         await coordinator.send_all(_ABORT, ts, node_ids=participant_node_ids)
+        coordinator.resume_workload()
         return SnapshotResult(
             success=False,
             causal_consistent=False,
@@ -92,6 +99,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     )
     if len(responding_node_ids) < coordinator.minimum_snapshot_nodes():
         await coordinator.send_all(_ABORT, ts, node_ids=participant_node_ids)
+        coordinator.resume_workload()
         return SnapshotResult(
             success=False,
             causal_consistent=False,
@@ -113,6 +121,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
         if not all(r is not None and r.get("type") == "ACK" for r in commit_responses):
             logger.warning("Two-phase: some nodes failed COMMIT at ts=%d", ts)
             await coordinator.send_all(_ABORT, ts, node_ids=participant_node_ids)
+            coordinator.resume_workload()
             return SnapshotResult(
                 success=False, causal_consistent=True,
                 conservation_holds=False,
@@ -163,6 +172,8 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             recovery_balance_sum = rv["balance_sum"]
             recovery_conservation = rv.get("conservation_holds")
 
+        coordinator.resume_workload()
+
         return SnapshotResult(
             success=True,
             participant_node_ids=responding_node_ids,
@@ -180,6 +191,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
         )
     else:
         await coordinator.send_all(_ABORT, ts, node_ids=participant_node_ids)
+        coordinator.resume_workload()
         return SnapshotResult(
             success=False,
             participant_node_ids=responding_node_ids,

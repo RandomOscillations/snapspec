@@ -212,6 +212,7 @@ class StorageNode:
         # The coordinator collects these via GET_WRITE_LOG for conservation.
         self._local_transfer_amounts: dict[int, int] = {}
         self._local_workload = None  # set via set_workload()
+        self._workload_epoch = 0
 
         # Serializes write/snapshot operations (FM1: race prevention)
         self._state_lock = asyncio.Lock()
@@ -622,6 +623,17 @@ class StorageNode:
             dep_tag = msg.get("dep_tag", 0)
             role_str = msg.get("role", "NONE")
             partner = msg.get("partner", -1)
+            workload_epoch = int(msg.get("workload_epoch", self._workload_epoch))
+            if workload_epoch < self._workload_epoch:
+                await self._send(
+                    writer,
+                    MessageType.WRITE_ACK,
+                    ts,
+                    block_id=block_id,
+                    write_timestamp=self._hlc.tick(),
+                    stale=True,
+                )
+                return
             write_key = self._write_dedupe_key(msg)
             if write_key is not None and await self._send_cached_write_ack(
                 writer, msg, write_key
@@ -795,7 +807,10 @@ class StorageNode:
         """Re-enable cross-node transfers on the co-located workload."""
         ts = msg["logical_timestamp"]
         if self._local_workload is not None:
-            self._local_workload.resume_transfers()
+            if getattr(self._local_workload, "_local_conn", None) is None:
+                await self._local_workload.start()
+            else:
+                self._local_workload.resume_transfers()
         await self._send(writer, MessageType.ACK, ts)
 
     async def _handle_get_workload_stats(self, msg: dict, writer: asyncio.StreamWriter):
@@ -803,6 +818,7 @@ class StorageNode:
         workload_writes = 0
         pending_transfers = 0
         workload_running = False
+        workload_registered = self._local_workload is not None
         if self._local_workload is not None:
             workload_writes = int(getattr(self._local_workload, "writes_completed", 0))
             pending_transfers = len(getattr(self._local_workload, "_pending_effects", {}))
@@ -814,6 +830,7 @@ class StorageNode:
             writes_completed=workload_writes,
             pending_transfers=pending_transfers,
             workload_running=workload_running,
+            workload_registered=workload_registered,
             node_balance=self._balance,
             total_writes=self.total_writes,
         )
@@ -942,10 +959,7 @@ class StorageNode:
 
         resume_workload = msg.get("resume_workload", True)
         if self._local_workload is not None:
-            await self._local_workload.reset_for_experiment(
-                new_balance,
-                restart=resume_workload,
-            )
+            await self._local_workload.pause_all()
 
         async with self._state_lock:
             # Discard any active snapshot
@@ -975,7 +989,15 @@ class StorageNode:
             self._archive_balances = {}
             self._snapshot_ground_truth = {}
             self._applied_write_acks = {}
+            self._workload_epoch += 1
             self._persist_runtime_state()
+
+        if self._local_workload is not None:
+            await self._local_workload.reset_for_experiment(
+                new_balance,
+                restart=resume_workload,
+                start_if_never_started=resume_workload,
+            )
 
         log_event(
             logger,
