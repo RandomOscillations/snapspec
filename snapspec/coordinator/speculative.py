@@ -91,10 +91,10 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
         if coordinator.validation_grace_s > 0:
             await asyncio.sleep(coordinator.validation_grace_s)
 
-        # Step 2: Collect write logs + snapshot-time balances with deadline
+        # Step 2: Finalize the attempt and collect final logs + balances with deadline
         try:
             all_logs, snapshot_balances, responding_node_ids = await asyncio.wait_for(
-                coordinator.collect_write_logs_and_balances_parallel(
+                coordinator.collect_finalized_write_logs_and_balances_parallel(
                     attempt_ts, node_ids=participant_node_ids
                 ),
                 timeout=timeout,
@@ -111,7 +111,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
 
         if len(responding_node_ids) < coordinator.minimum_snapshot_nodes():
             abort_responses = await coordinator.send_all(
-                _ABORT, attempt_ts, node_ids=responding_node_ids
+                _ABORT, attempt_ts, node_ids=participant_node_ids
             )
             delta_blocks_at_discard.extend(_extract_delta_blocks(abort_responses))
             if attempt < max_retries:
@@ -135,6 +135,9 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                 )
                 delta_blocks_at_discard.extend(
                     _extract_delta_blocks(commit_responses))
+                await coordinator.send_all(
+                    _ABORT, attempt_ts, node_ids=participant_node_ids
+                )
                 if attempt < max_retries:
                     await asyncio.sleep(_BACKOFF_BASE_S * (attempt + 1))
                 continue
@@ -203,7 +206,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
 
         # Step 4b: Inconsistent — abort
         abort_responses = await coordinator.send_all(
-            _ABORT, attempt_ts, node_ids=responding_node_ids
+            _ABORT, attempt_ts, node_ids=participant_node_ids
         )
         attempt_deltas = _extract_delta_blocks(abort_responses)
         delta_blocks_at_discard.extend(attempt_deltas)

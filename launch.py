@@ -119,75 +119,106 @@ async def wait_for_nodes(node_configs: list[dict], timeout: float = 60.0):
 
 
 async def reset_nodes(node_configs: list[dict], balances: list[int]):
-    for cfg in node_configs:
-        try:
-            conn = NodeConnection(
-                node_id=cfg["node_id"], host=cfg["host"], port=cfg["port"],
-            )
-            await conn.connect()
-            await conn.send_and_receive(
-                MessageType.DRAIN_WORKLOAD, 0, stop_all=True,
-            )
-            await conn.close()
-        except (ConnectionRefusedError, OSError, asyncio.TimeoutError):
-            print(f"  Warning: Node {cfg['node_id']} unreachable during workload drain (skipping)")
+    drain_results = await asyncio.gather(*[
+        _node_rpc(cfg, MessageType.DRAIN_WORKLOAD, stop_all=True)
+        for cfg in node_configs
+    ])
+    for cfg, resp in zip(node_configs, drain_results):
+        if resp is None or resp.get("type") != MessageType.WORKLOAD_DRAINED.value:
+            print(f"  Warning: Node {cfg['node_id']} did not drain cleanly before reset")
 
-    for cfg in node_configs:
-        try:
-            conn = NodeConnection(
-                node_id=cfg["node_id"], host=cfg["host"], port=cfg["port"],
-            )
-            await conn.connect()
-            await conn.send_and_receive(
-                MessageType.RESET,
-                0,
-                balance=balances[cfg["node_id"]],
-                resume_workload=False,
-            )
-            await conn.close()
-        except (ConnectionRefusedError, OSError, asyncio.TimeoutError):
-            print(f"  Warning: Node {cfg['node_id']} unreachable during reset (skipping)")
+    reset_results = await asyncio.gather(*[
+        _node_rpc(
+            cfg,
+            MessageType.RESET,
+            balance=balances[cfg["node_id"]],
+            resume_workload=False,
+        )
+        for cfg in node_configs
+    ])
+    for cfg, resp in zip(node_configs, reset_results):
+        if resp is None or resp.get("type") != MessageType.ACK.value:
+            print(f"  Warning: Node {cfg['node_id']} did not reset cleanly")
 
-    for cfg in node_configs:
-        try:
-            conn = NodeConnection(
-                node_id=cfg["node_id"], host=cfg["host"], port=cfg["port"],
-            )
-            await conn.connect()
-            await conn.send_and_receive(MessageType.RESUME_WORKLOAD, 0)
-            await conn.close()
-        except (ConnectionRefusedError, OSError, asyncio.TimeoutError):
-            print(f"  Warning: Node {cfg['node_id']} unreachable during workload resume (skipping)")
+    resume_results = await asyncio.gather(*[
+        _node_rpc(cfg, MessageType.RESUME_WORKLOAD)
+        for cfg in node_configs
+    ])
+    for cfg, resp in zip(node_configs, resume_results):
+        if resp is None or resp.get("type") != MessageType.ACK.value:
+            print(f"  Warning: Node {cfg['node_id']} workload did not resume cleanly")
+
+
+async def _node_rpc(cfg: dict, msg_type: MessageType, **kwargs) -> dict | None:
+    conn = NodeConnection(
+        node_id=cfg["node_id"], host=cfg["host"], port=cfg["port"],
+    )
+    try:
+        await conn.connect()
+        return await conn.send_and_receive(msg_type, 0, **kwargs)
+    except (ConnectionRefusedError, OSError, asyncio.TimeoutError):
+        return None
+    finally:
+        await conn.close()
 
 
 async def restore_global_snapshot(node_configs: list[dict], snapshot_ts: int) -> bool:
     """Restore all reachable nodes to the same committed snapshot timestamp."""
-    ok = True
-    for cfg in node_configs:
-        conn = NodeConnection(
-            node_id=cfg["node_id"], host=cfg["host"], port=cfg["port"],
-        )
-        try:
-            await conn.connect()
-            resp = await conn.send_and_receive(
-                MessageType.RESTORE_SNAPSHOT,
-                0,
-                snapshot_ts=snapshot_ts,
-            )
+    prepare_results = await asyncio.gather(*[
+        _node_rpc(cfg, MessageType.RESTORE_PREPARE, snapshot_ts=snapshot_ts)
+        for cfg in node_configs
+    ])
+    prepared = all(
+        resp is not None and resp.get("type") == MessageType.ACK.value
+        for resp in prepare_results
+    )
+    if not prepared:
+        for cfg, resp in zip(node_configs, prepare_results):
+            if resp is None or resp.get("type") != MessageType.ACK.value:
+                print(f"  Restore prepare failed on node {cfg['node_id']}: {resp}")
+        await asyncio.gather(*[
+            _node_rpc(cfg, MessageType.RESTORE_ABORT, snapshot_ts=snapshot_ts)
+            for cfg in node_configs
+        ])
+        return False
+
+    commit_results = await asyncio.gather(*[
+        _node_rpc(cfg, MessageType.RESTORE_COMMIT, snapshot_ts=snapshot_ts)
+        for cfg in node_configs
+    ])
+    committed = all(
+        resp is not None and resp.get("type") == MessageType.SNAPSHOT_RESTORED.value
+        for resp in commit_results
+    )
+    if not committed:
+        for cfg, resp in zip(node_configs, commit_results):
             if resp is None or resp.get("type") != MessageType.SNAPSHOT_RESTORED.value:
-                ok = False
-                print(f"  Restore failed on node {cfg['node_id']}: {resp}")
-            else:
-                print(
-                    f"  Node {cfg['node_id']} restored to snapshot {snapshot_ts} "
-                    f"(balance={resp.get('balance')})"
-                )
-        except (ConnectionRefusedError, OSError, asyncio.TimeoutError) as exc:
-            ok = False
-            print(f"  Restore failed on node {cfg['node_id']}: {exc}")
-        finally:
-            await conn.close()
-    return ok
+                print(f"  Restore commit failed on node {cfg['node_id']}: {resp}")
+        await asyncio.gather(*[
+            _node_rpc(cfg, MessageType.RESTORE_ABORT, snapshot_ts=snapshot_ts)
+            for cfg in node_configs
+        ])
+        await _resume_nodes_after_restore(node_configs)
+        return False
+
+    for cfg, resp in zip(node_configs, commit_results):
+        print(
+            f"  Node {cfg['node_id']} restored to snapshot {snapshot_ts} "
+            f"(balance={resp.get('balance')})"
+        )
+    await _resume_nodes_after_restore(node_configs)
+    return True
+
+
+async def _resume_nodes_after_restore(node_configs: list[dict]) -> None:
+    await asyncio.gather(*[
+        _node_rpc(cfg, MessageType.RESUME)
+        for cfg in node_configs
+    ])
+    await asyncio.gather(*[
+        _node_rpc(cfg, MessageType.RESUME_WORKLOAD)
+        for cfg in node_configs
+    ])
 
 
 async def clear_local_pending_outbox(outbox_path: str, run_id: str) -> None:

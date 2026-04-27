@@ -84,6 +84,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     if not _all_responded_with(responses, _SNAPPED):
         # Snapshot failed on some node — resume and abort
         coordinator.resume_workload()
+        await coordinator.send_all("ABORT", ts, node_ids=participant_node_ids)
         await coordinator.send_all(_RESUME, ts, node_ids=participant_node_ids)
         return SnapshotResult(
             success=False,
@@ -100,6 +101,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
         )
     )
     if len(responding_node_ids) < coordinator.minimum_snapshot_nodes():
+        await coordinator.send_all("ABORT", ts, node_ids=participant_node_ids)
         await coordinator.send_all(_RESUME, ts, node_ids=participant_node_ids)
         return SnapshotResult(
             success=False,
@@ -142,7 +144,8 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     if not _all_responded_with(commit_responses, "ACK"):
         logger.warning("Pause-and-snap: some nodes failed COMMIT at ts=%d", ts)
         coordinator.resume_workload()
-        await coordinator.send_all(_RESUME, ts, node_ids=responding_node_ids)
+        await coordinator.send_all("ABORT", ts, node_ids=participant_node_ids)
+        await coordinator.send_all(_RESUME, ts, node_ids=participant_node_ids)
         return SnapshotResult(success=False, conservation_holds=False,
                               participant_node_ids=responding_node_ids,
                               failure_reason="commit_failed")

@@ -100,6 +100,14 @@ class CoordinatorProtocol(Protocol):
         """
         ...
 
+    async def collect_finalized_write_logs_and_balances_parallel(
+        self,
+        ts: int,
+        node_ids: list[int] | None = None,
+    ) -> tuple[list[list[dict[str, Any]]], list[int], list[int]]:
+        """Close the snapshot write window, then collect final logs/balances."""
+        ...
+
     async def verify_snapshot_recovery(
         self,
         snapshot_ts: int,

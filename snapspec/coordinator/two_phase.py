@@ -84,14 +84,14 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     if coordinator.validation_grace_s > 0:
         await asyncio.sleep(coordinator.validation_grace_s)
 
-    # Collect write logs + snapshot-time balances in parallel.
+    # Close the post-snapshot write window, then collect final logs + balances.
     all_logs, snapshot_balances, responding_node_ids = (
-        await coordinator.collect_write_logs_and_balances_parallel(
+        await coordinator.collect_finalized_write_logs_and_balances_parallel(
             ts, node_ids=participant_node_ids
         )
     )
     if len(responding_node_ids) < coordinator.minimum_snapshot_nodes():
-        await coordinator.send_all(_ABORT, ts, node_ids=responding_node_ids)
+        await coordinator.send_all(_ABORT, ts, node_ids=participant_node_ids)
         return SnapshotResult(
             success=False,
             causal_consistent=False,
@@ -112,6 +112,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
         )
         if not all(r is not None and r.get("type") == "ACK" for r in commit_responses):
             logger.warning("Two-phase: some nodes failed COMMIT at ts=%d", ts)
+            await coordinator.send_all(_ABORT, ts, node_ids=participant_node_ids)
             return SnapshotResult(
                 success=False, causal_consistent=True,
                 conservation_holds=False,
@@ -178,7 +179,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             recovery_conservation_holds=recovery_conservation,
         )
     else:
-        await coordinator.send_all(_ABORT, ts, node_ids=responding_node_ids)
+        await coordinator.send_all(_ABORT, ts, node_ids=participant_node_ids)
         return SnapshotResult(
             success=False,
             participant_node_ids=responding_node_ids,

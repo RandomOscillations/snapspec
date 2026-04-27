@@ -223,6 +223,8 @@ class StorageNode:
 
         # Archive metadata: maps archive_path -> snapshot-time balance
         self._archive_balances: dict[str, int] = {}
+        self._restore_prepared_snapshot_ts: int | None = None
+        self._restore_prepared_archive_path: str | None = None
 
         # Idempotency cache for WRITE requests. Cross-node token transfer
         # writes carry stable ids so reconnect/retry cannot double-apply a
@@ -563,6 +565,24 @@ class StorageNode:
             "write_timestamp": write_ts,
         }
 
+    def _write_log_payload_locked(self) -> tuple[list[dict], int, dict, dict]:
+        raw_log = self.block_store.get_write_log()
+        entries = [
+            {
+                "block_id": e.block_id,
+                "timestamp": e.timestamp,
+                "dependency_tag": e.dependency_tag,
+                "role": _role_to_str(e.role),
+                "partner_node_id": e.partner_node_id,
+            }
+            for e in raw_log
+        ]
+        balance = self._snapshot_balance if self._snapshot_balance is not None else self._balance
+        pending_records = {}
+        if self._local_workload is not None:
+            pending_records = self._local_workload.pending_transfer_records
+        return entries, balance, self._local_transfer_amounts, pending_records
+
     def _capture_ground_truth(self, snapshot_ts: int):
         """Read all blocks right after create_snapshot() to record ground truth.
 
@@ -852,30 +872,40 @@ class StorageNode:
         ts = msg["logical_timestamp"]
 
         async with self._state_lock:
-            raw_log = self.block_store.get_write_log()
-
-        entries = [
-            {
-                "block_id": e.block_id,
-                "timestamp": e.timestamp,
-                "dependency_tag": e.dependency_tag,
-                "role": _role_to_str(e.role),
-                "partner_node_id": e.partner_node_id,
-            }
-            for e in raw_log
-        ]
-
-        # Return snapshot-time balance if available, otherwise live balance
-        balance = self._snapshot_balance if self._snapshot_balance is not None else self._balance
-        # Include pending transfer records from co-located workload
-        pending_records = {}
-        if self._local_workload is not None:
-            pending_records = self._local_workload.pending_transfer_records
+            entries, balance, transfer_amounts, pending_records = (
+                self._write_log_payload_locked()
+            )
 
         await self._send(writer, MessageType.WRITE_LOG, ts,
                          entries=entries, balance=balance,
                          snapshot_balance=balance,
-                         transfer_amounts=self._local_transfer_amounts,
+                         transfer_amounts=transfer_amounts,
+                         pending_transfer_records=pending_records)
+
+    async def _handle_finalize_snapshot(self, msg: dict, writer: asyncio.StreamWriter):
+        """Close the post-snapshot write window and return final logs."""
+        ts = msg["logical_timestamp"]
+
+        async with self._state_lock:
+            if self.state not in (NodeState.PREPARED, NodeState.SNAPPED):
+                await self._send_error(
+                    writer,
+                    msg,
+                    (
+                        "FINALIZE_SNAPSHOT rejected: node is "
+                        f"{self.state.value}, expected PREPARED or SNAPPED"
+                    ),
+                )
+                return
+            self._writes_paused = True
+            entries, balance, transfer_amounts, pending_records = (
+                self._write_log_payload_locked()
+            )
+
+        await self._send(writer, MessageType.WRITE_LOG, ts,
+                         entries=entries, balance=balance,
+                         snapshot_balance=balance,
+                         transfer_amounts=transfer_amounts,
                          pending_transfer_records=pending_records)
 
     async def _handle_reset(self, msg: dict, writer: asyncio.StreamWriter):
@@ -909,6 +939,8 @@ class StorageNode:
             self._balance = new_balance
             self._snapshot_balance = None
             self._writes_paused = False
+            self._restore_prepared_snapshot_ts = None
+            self._restore_prepared_archive_path = None
             self.snapshot_ts = 0
             self.writes_during_snapshot = 0
             self.total_writes = 0
@@ -1105,6 +1137,118 @@ class StorageNode:
             balance=self._balance,
         )
 
+    async def _handle_restore_prepare(self, msg: dict, writer: asyncio.StreamWriter):
+        """Prepare for coordinated global restore without changing state yet."""
+        ts = msg["logical_timestamp"]
+        snapshot_ts = msg.get("snapshot_ts")
+        if snapshot_ts is None:
+            await self._send_error(writer, msg, "RESTORE_PREPARE requires snapshot_ts")
+            return
+
+        if self._local_workload is not None:
+            await self._local_workload.pause_all()
+
+        archive_path = f"{self.archive_dir}/node{self.node_id}_snap_{snapshot_ts}"
+        error: str | None = None
+        balance: int | None = None
+        async with self._state_lock:
+            self._writes_paused = True
+            if not os.path.isfile(archive_path):
+                error = f"No archive found at {archive_path}"
+            elif archive_path not in self._archive_balances:
+                error = f"No archived balance recorded for {archive_path}"
+            else:
+                self._restore_prepared_snapshot_ts = snapshot_ts
+                self._restore_prepared_archive_path = archive_path
+                balance = self._archive_balances[archive_path]
+
+            if error is not None:
+                self._writes_paused = False
+                self._restore_prepared_snapshot_ts = None
+                self._restore_prepared_archive_path = None
+
+        if error is not None:
+            if self._local_workload is not None:
+                self._local_workload.resume_transfers()
+            await self._send_error(writer, msg, error)
+            return
+
+        await self._send(
+            writer,
+            MessageType.ACK,
+            ts,
+            snapshot_ts=snapshot_ts,
+            balance=balance,
+        )
+
+    async def _handle_restore_commit(self, msg: dict, writer: asyncio.StreamWriter):
+        """Commit a prepared restore. Leaves writes paused until RESUME."""
+        ts = msg["logical_timestamp"]
+        snapshot_ts = msg.get("snapshot_ts")
+
+        async with self._state_lock:
+            if (
+                snapshot_ts is None
+                or self._restore_prepared_snapshot_ts != snapshot_ts
+                or self._restore_prepared_archive_path is None
+            ):
+                await self._send_error(
+                    writer,
+                    msg,
+                    "RESTORE_COMMIT rejected: restore was not prepared",
+                )
+                return
+
+            archive_path = self._restore_prepared_archive_path
+            archive_balance = self._archive_balances[archive_path]
+
+            if self.block_store.is_snapshot_active():
+                delta_count = self.block_store.discard_snapshot()
+                self.delta_blocks_at_discard.append(delta_count)
+
+            self._restore_blocks_from_archive(archive_path)
+            self._balance = archive_balance
+            self.state = NodeState.IDLE
+            self.snapshot_ts = 0
+            self._snapshot_balance = None
+            self.writes_during_snapshot = 0
+            self.delta_blocks_at_discard = []
+            self._snapshot_ground_truth = {}
+            self._applied_write_acks = {}
+            self._restore_prepared_snapshot_ts = None
+            self._restore_prepared_archive_path = None
+            self._persist_runtime_state()
+
+        if self._local_workload is not None:
+            await self._local_workload.clear_pending_effects()
+            self._local_workload.set_local_balance(self._balance)
+
+        log_event(
+            logger,
+            component=self._component,
+            event="snapshot_restored",
+            snapshot_ts=snapshot_ts,
+            archive=archive_path,
+            balance=self._balance,
+        )
+        await self._send(
+            writer,
+            MessageType.SNAPSHOT_RESTORED,
+            ts,
+            snapshot_ts=snapshot_ts,
+            balance=self._balance,
+        )
+
+    async def _handle_restore_abort(self, msg: dict, writer: asyncio.StreamWriter):
+        ts = msg["logical_timestamp"]
+        async with self._state_lock:
+            self._restore_prepared_snapshot_ts = None
+            self._restore_prepared_archive_path = None
+            self._writes_paused = False
+        if self._local_workload is not None:
+            self._local_workload.resume_transfers()
+        await self._send(writer, MessageType.ACK, ts)
+
     async def _handle_shutdown(self, msg: dict, writer: asyncio.StreamWriter):
         ts = msg["logical_timestamp"]
 
@@ -1134,9 +1278,13 @@ class StorageNode:
         MessageType.COMMIT.value: _handle_commit,
         MessageType.ABORT.value: _handle_abort,
         MessageType.GET_WRITE_LOG.value: _handle_get_write_log,
+        MessageType.FINALIZE_SNAPSHOT.value: _handle_finalize_snapshot,
         MessageType.GET_SNAPSHOT_STATE.value: _handle_get_snapshot_state,
         MessageType.VERIFY_SNAPSHOT_RESTORE.value: _handle_verify_snapshot_restore,
         MessageType.RESTORE_SNAPSHOT.value: _handle_restore_snapshot,
+        MessageType.RESTORE_PREPARE.value: _handle_restore_prepare,
+        MessageType.RESTORE_COMMIT.value: _handle_restore_commit,
+        MessageType.RESTORE_ABORT.value: _handle_restore_abort,
         MessageType.DRAIN_WORKLOAD.value: _handle_drain_workload,
         MessageType.RESUME_WORKLOAD.value: _handle_resume_workload,
         MessageType.RESET.value: _handle_reset,

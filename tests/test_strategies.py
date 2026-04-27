@@ -59,6 +59,14 @@ class MockCoordinator:
         node_ids = kwargs.get("node_ids", list(range(len(balances))))
         return self._write_logs, balances, node_ids
 
+    async def collect_finalized_write_logs_and_balances_parallel(
+        self, ts: int, **kwargs
+    ) -> tuple[list[list[dict]], list[int], list[int]]:
+        self._call_log.append(("FINALIZE_SNAPSHOT", ts))
+        balances = self._snapshot_balances or [0] * len(self._write_logs)
+        node_ids = kwargs.get("node_ids", list(range(len(balances))))
+        return self._write_logs, balances, node_ids
+
     async def verify_snapshot_recovery(self, snapshot_ts: int, **kwargs) -> dict:
         self._call_log.append(("VERIFY_RECOVERY", snapshot_ts))
         return {
@@ -136,6 +144,7 @@ class TestPauseAndSnap:
         coord.set_response("SNAP_NOW", [{"type": "SNAPPED"}, {"type": "ERROR"}])
         result = await execute(coord, ts=1)
         assert not result.success
+        assert coord.was_called("ABORT")
         assert coord.was_called("RESUME")
 
 
@@ -220,7 +229,7 @@ class TestSpeculative:
                 return [[_entry(tag=1, role="CAUSE")], []], [0, 0], nids
             return [[], []], [0, 0], nids
 
-        coord.collect_write_logs_and_balances_parallel = mock_collect
+        coord.collect_finalized_write_logs_and_balances_parallel = mock_collect
         result = await execute(coord, ts=1)
         assert result.success
         assert result.retries == 2
@@ -239,7 +248,7 @@ class TestSpeculative:
                 return [[_entry(tag=1, role="CAUSE")], []], [0, 0], nids
             return [[], []], [0, 0], nids  # two-phase fallback
 
-        coord.collect_write_logs_and_balances_parallel = mock_collect
+        coord.collect_finalized_write_logs_and_balances_parallel = mock_collect
         result = await execute(coord, ts=1)
         assert result.success  # two-phase fallback succeeds
         assert result.retries == 3  # max_retries + 1 indicates fallback
@@ -257,7 +266,7 @@ class TestSpeculative:
                 return [[_entry(tag=1, role="CAUSE")], []], [0, 0], nids
             return [[], []], [0, 0], nids
 
-        coord.collect_write_logs_and_balances_parallel = inconsistent_then_consistent
+        coord.collect_finalized_write_logs_and_balances_parallel = inconsistent_then_consistent
         result = await execute(coord, ts=1)
         assert result.success
         assert result.delta_blocks_at_discard is not None

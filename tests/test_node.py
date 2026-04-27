@@ -268,6 +268,39 @@ class TestStateMachine:
 
 class TestWriteLog:
     @pytest.mark.asyncio
+    async def test_finalize_snapshot_pauses_writes_until_commit(self, block_store):
+        node = await _start_node(block_store)
+        try:
+            conn = await _connect(node)
+
+            data_b64 = base64.b64encode(b"\x04" * 64).decode("ascii")
+            resp = await conn.send_and_receive(
+                MessageType.SNAP_NOW, 1, snapshot_ts=1,
+            )
+            assert resp["type"] == "SNAPPED"
+
+            resp = await conn.send_and_receive(MessageType.FINALIZE_SNAPSHOT, 2)
+            assert resp["type"] == "WRITE_LOG"
+
+            resp = await conn.send_and_receive(
+                MessageType.WRITE, 3,
+                block_id=0, data=data_b64, role="NONE",
+            )
+            assert resp["type"] == "PAUSED_ERR"
+
+            resp = await conn.send_and_receive(MessageType.COMMIT, 4)
+            assert resp["type"] == "ACK"
+
+            resp = await conn.send_and_receive(
+                MessageType.WRITE, 5,
+                block_id=0, data=data_b64, role="NONE",
+            )
+            assert resp["type"] == "WRITE_ACK"
+            await conn.close()
+        finally:
+            await node.stop()
+
+    @pytest.mark.asyncio
     async def test_get_write_log_returns_entries(self, block_store):
         node = await _start_node(block_store)
         try:

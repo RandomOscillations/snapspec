@@ -210,12 +210,31 @@ class Coordinator:
             snapshot_balances[i] is the balance node i held when its snapshot was taken.
         """
 
+        return await self._collect_write_logs_and_balances_with_message(
+            MessageType.GET_WRITE_LOG, ts, node_ids=node_ids
+        )
+
+    async def collect_finalized_write_logs_and_balances_parallel(
+        self, ts: int, node_ids: list[int] | None = None
+    ) -> tuple[list[list[dict[str, Any]]], list[int], list[int]]:
+        """Pause the snapshot delta window and collect final logs + balances."""
+
+        return await self._collect_write_logs_and_balances_with_message(
+            MessageType.FINALIZE_SNAPSHOT, ts, node_ids=node_ids
+        )
+
+    async def _collect_write_logs_and_balances_with_message(
+        self,
+        msg_type: MessageType,
+        ts: int,
+        node_ids: list[int] | None = None,
+    ) -> tuple[list[list[dict[str, Any]]], list[int], list[int]]:
         connections = self._select_connections(node_ids)
 
         async def _collect_one(conn: NodeConnection) -> tuple[int, list[dict], int, dict, dict, bool]:
             resp = await self._send_with_timeout(
                 conn,
-                MessageType.GET_WRITE_LOG,
+                msg_type,
                 ts,
                 timeout_s=self.validation_timeout_s,
                 error_context="Write log collection",
@@ -237,6 +256,7 @@ class Coordinator:
         all_logs = []
         snapshot_balances = []
         responding_node_ids = []
+        fresh_pending: dict[int, dict] = {}
         for node_id, entries, snapshot_balance, node_transfers, node_pending, ok in pairs:
             if not ok:
                 continue
@@ -250,8 +270,9 @@ class Coordinator:
             # Merge node-local pending_transfer_records
             if node_pending:
                 for tag, record in node_pending.items():
-                    self._remote_pending_transfers[int(tag)] = record
+                    fresh_pending[int(tag)] = record
 
+        self._remote_pending_transfers = fresh_pending
         self._update_last_known_balances(responding_node_ids, snapshot_balances)
         return all_logs, snapshot_balances, responding_node_ids
 
