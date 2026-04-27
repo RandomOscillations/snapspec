@@ -221,6 +221,43 @@ async def _resume_nodes_after_restore(node_configs: list[dict]) -> None:
     ])
 
 
+async def _cluster_workload_write_count(node_configs: list[dict]) -> int:
+    responses = await asyncio.gather(*[
+        _node_rpc(cfg, MessageType.GET_WORKLOAD_STATS)
+        for cfg in node_configs
+    ])
+    return sum(
+        int(resp.get("writes_completed", 0))
+        for resp in responses
+        if resp is not None and resp.get("type") == MessageType.WORKLOAD_STATS.value
+    )
+
+
+async def sample_cluster_throughput(
+    node_configs: list[dict],
+    metrics: MetricsCollector,
+    stop_event: asyncio.Event,
+    interval_s: float = 1.0,
+) -> None:
+    prev_writes = await _cluster_workload_write_count(node_configs)
+    prev_t = time.monotonic()
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval_s)
+            break
+        except asyncio.TimeoutError:
+            pass
+
+        now = time.monotonic()
+        current_writes = await _cluster_workload_write_count(node_configs)
+        elapsed = max(now - prev_t, 1e-9)
+        metrics.record_throughput_sample(
+            (current_writes - prev_writes) / elapsed
+        )
+        prev_writes = current_writes
+        prev_t = now
+
+
 async def clear_local_pending_outbox(outbox_path: str, run_id: str) -> None:
     outbox = PendingTransferOutbox.for_sqlite(outbox_path)
     await outbox.clear_pending(run_id)
@@ -261,6 +298,15 @@ async def run_strategy(
     await coordinator.start()
 
     coordinator._running = True
+    throughput_stop = asyncio.Event()
+    throughput_task = asyncio.create_task(
+        sample_cluster_throughput(
+            node_configs,
+            metrics,
+            throughput_stop,
+            interval_s=float(exp_cfg.get("throughput_sample_interval_s", 1.0)),
+        )
+    )
     duration_s = exp_cfg["duration_s"]
     snap_task = asyncio.create_task(
         coordinator._snapshot_loop(duration_s)
@@ -278,6 +324,16 @@ async def run_strategy(
         coordinator._running = False
     except asyncio.CancelledError:
         pass
+
+    throughput_stop.set()
+    try:
+        await asyncio.wait_for(throughput_task, timeout=2.0)
+    except asyncio.TimeoutError:
+        throughput_task.cancel()
+        try:
+            await throughput_task
+        except asyncio.CancelledError:
+            pass
 
     try:
         await asyncio.wait_for(
@@ -530,6 +586,7 @@ async def run_node(config: dict, node_id: int, node_only: bool = False,
             print(f"    Commit rate:      {s.get('snapshot_success_rate', 0):.1%}")
             print(f"    p50 latency:      {s.get('p50_latency_ms', 0):.2f} ms")
             print(f"    p99 latency:      {s.get('p99_latency_ms', 0):.2f} ms")
+            print(f"    Throughput:       {s.get('avg_throughput_writes_sec', 0):.1f} writes/s")
             print(f"    Avg retries:      {s.get('avg_retry_rate', 0):.1f}")
             print(f"    Restore verified: {s.get('recovery_rate', 0):.1%}")
             test_num += 1

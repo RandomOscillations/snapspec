@@ -138,6 +138,18 @@ class MetricsCollector:
     def latest_throughput_wps(self) -> float:
         return self._latest_throughput_wps
 
+    def record_throughput_sample(
+        self,
+        writes_per_sec: float,
+        coordinator_cpu_pct: float = -1.0,
+    ) -> None:
+        self._latest_throughput_wps = writes_per_sec
+        self._throughput_samples.append(_ThroughputSample(
+            timestamp=time.monotonic(),
+            writes_per_sec=writes_per_sec,
+            coordinator_cpu_pct=coordinator_cpu_pct,
+        ))
+
     def latest_conservation_rate(self) -> float | None:
         checked = [s for s in self._snapshots if s.conservation_holds is not None]
         if not checked:

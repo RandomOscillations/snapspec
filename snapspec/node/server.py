@@ -791,6 +791,26 @@ class StorageNode:
             self._local_workload.resume_transfers()
         await self._send(writer, MessageType.ACK, ts)
 
+    async def _handle_get_workload_stats(self, msg: dict, writer: asyncio.StreamWriter):
+        ts = msg["logical_timestamp"]
+        workload_writes = 0
+        pending_transfers = 0
+        workload_running = False
+        if self._local_workload is not None:
+            workload_writes = int(getattr(self._local_workload, "writes_completed", 0))
+            pending_transfers = len(getattr(self._local_workload, "_pending_effects", {}))
+            workload_running = bool(getattr(self._local_workload, "_running", False))
+        await self._send(
+            writer,
+            MessageType.WORKLOAD_STATS,
+            ts,
+            writes_completed=workload_writes,
+            pending_transfers=pending_transfers,
+            workload_running=workload_running,
+            node_balance=self._balance,
+            total_writes=self.total_writes,
+        )
+
     async def _handle_commit(self, msg: dict, writer: asyncio.StreamWriter):
         ts = msg["logical_timestamp"]
 
@@ -1287,6 +1307,7 @@ class StorageNode:
         MessageType.RESTORE_ABORT.value: _handle_restore_abort,
         MessageType.DRAIN_WORKLOAD.value: _handle_drain_workload,
         MessageType.RESUME_WORKLOAD.value: _handle_resume_workload,
+        MessageType.GET_WORKLOAD_STATS.value: _handle_get_workload_stats,
         MessageType.RESET.value: _handle_reset,
         MessageType.SHUTDOWN.value: _handle_shutdown,
     }

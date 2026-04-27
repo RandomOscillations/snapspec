@@ -95,6 +95,23 @@ class TestWriteRead:
             await node.stop()
 
     @pytest.mark.asyncio
+    async def test_workload_stats_without_workload(self, block_store):
+        node = await _start_node(block_store)
+        try:
+            conn = await _connect(node)
+            resp = await conn.send_and_receive(MessageType.GET_WORKLOAD_STATS, 1)
+
+            assert resp["type"] == "WORKLOAD_STATS"
+            assert resp["writes_completed"] == 0
+            assert resp["pending_transfers"] == 0
+            assert resp["workload_running"] is False
+            assert resp["node_balance"] == 1000
+
+            await conn.close()
+        finally:
+            await node.stop()
+
+    @pytest.mark.asyncio
     async def test_read_unwritten_block_returns_zeros(self, block_store):
         node = await _start_node(block_store)
         try:
