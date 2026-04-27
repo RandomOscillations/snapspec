@@ -34,6 +34,14 @@ _PENDING_RETRY_MAX_S = 5.0
 _SHUTDOWN_TIMEOUT_S = 3.0
 
 
+def _transfer_write_id(source: int, dest: int, dep_tag: int, role: str) -> str:
+    return f"transfer:{source}:{dest}:{dep_tag}:{role}"
+
+
+def _local_write_id(node_id: int, ts: int, block_id: int) -> str:
+    return f"local:{node_id}:{ts}:{block_id}"
+
+
 @dataclass
 class PendingTransfer:
     """Source-owned credit leg whose local debit already committed."""
@@ -349,6 +357,9 @@ class NodeWorkload:
                     role="CAUSE",
                     partner=dest_id,
                     balance_delta=-amount,
+                    write_id=_transfer_write_id(
+                        self.node_id, dest_id, dep_tag, "CAUSE"
+                    ),
                 )
             except Exception:
                 self._pending_effects.pop(dep_tag, None)
@@ -395,6 +406,9 @@ class NodeWorkload:
                 role="EFFECT",
                 partner=pending.source,
                 balance_delta=pending.amount,
+                write_id=_transfer_write_id(
+                    pending.source, pending.dest, pending.dep_tag, "EFFECT"
+                ),
             )
         except Exception as exc:
             pending.attempts += 1
@@ -438,6 +452,7 @@ class NodeWorkload:
             role="NONE",
             partner=-1,
             balance_delta=0,
+            write_id=_local_write_id(self.node_id, ts, block_id),
         )
 
     async def _send_write_with_retry(
@@ -450,6 +465,7 @@ class NodeWorkload:
         role: str,
         partner: int,
         balance_delta: int,
+        write_id: str,
     ) -> int:
         """Send a write, retrying on PAUSED_ERR."""
         if conn is None:
@@ -467,6 +483,7 @@ class NodeWorkload:
                 role=role,
                 partner=partner,
                 balance_delta=balance_delta,
+                write_id=write_id,
             )
 
             if resp is None:

@@ -151,6 +151,11 @@ class MySQLStorageNode(StorageNode):
             partner = msg.get("partner", -1)
             balance_delta = msg.get("balance_delta", 0)
             account_id = block_id % self._num_accounts
+            write_key = self._write_dedupe_key(msg)
+            if write_key is not None and await self._send_cached_write_ack(
+                writer, msg, write_key
+            ):
+                return
 
             # Step 1: MySQL first — source of truth.
             # If this fails the write is rejected; _balances and C++ are untouched.
@@ -183,8 +188,15 @@ class MySQLStorageNode(StorageNode):
             self.total_writes += 1
             if self.block_store.is_snapshot_active():
                 self.writes_during_snapshot += 1
+            self._record_write_ack(write_key, block_id, ts)
 
-        await self._send(writer, MessageType.WRITE_ACK, ts, block_id=block_id)
+        await self._send(
+            writer,
+            MessageType.WRITE_ACK,
+            ts,
+            block_id=block_id,
+            write_timestamp=ts,
+        )
 
     async def _handle_prepare(self, msg: dict, writer):
         ts = msg["logical_timestamp"]
@@ -328,6 +340,7 @@ class MySQLStorageNode(StorageNode):
             self._archive_balances = {}
             self._account_ground_truth = {}
             self._snapshot_ground_truth = {}
+            self._applied_write_acks = {}
 
         logger.info("Node %d: RESET (MySQL+C++, balance=%d)", self.node_id, new_balance)
         await self._send(writer, MessageType.ACK, ts)

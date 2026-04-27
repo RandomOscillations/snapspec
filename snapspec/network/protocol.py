@@ -28,6 +28,7 @@ class MessageType(str, Enum):
     SNAPPED = "SNAPPED"
     PAUSED = "PAUSED"
     ACK = "ACK"
+    ERROR = "ERROR"
     WRITE_LOG = "WRITE_LOG"
     PONG = "PONG"
 

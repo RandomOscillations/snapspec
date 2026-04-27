@@ -35,6 +35,14 @@ _PENDING_RETRY_BASE_S = 0.25
 _PENDING_RETRY_MAX_S = 5.0
 
 
+def _transfer_write_id(source: int, dest: int, dep_tag: int, role: str) -> str:
+    return f"transfer:{source}:{dest}:{dep_tag}:{role}"
+
+
+def _local_write_id(node_id: int, ts: int, block_id: int) -> str:
+    return f"local:{node_id}:{ts}:{block_id}"
+
+
 @dataclass
 class PendingTransfer:
     """Credit leg that must be replayed after the debit has committed."""
@@ -318,6 +326,7 @@ class WorkloadGenerator:
                 role="CAUSE",
                 partner=dest,
                 balance_delta=-amount,
+                write_id=_transfer_write_id(source, dest, dep_tag, "CAUSE"),
             )
 
             self._balances[source] -= amount
@@ -382,6 +391,9 @@ class WorkloadGenerator:
                 role="EFFECT",
                 partner=pending.source,
                 balance_delta=pending.amount,
+                write_id=_transfer_write_id(
+                    pending.source, pending.dest, pending.dep_tag, "EFFECT"
+                ),
             )
         except Exception as exc:
             pending.attempts += 1
@@ -443,6 +455,7 @@ class WorkloadGenerator:
             role="NONE",
             partner=-1,
             balance_delta=0,
+            write_id=_local_write_id(node_id, ts, block_id),
         )
         return 1
 
@@ -456,6 +469,7 @@ class WorkloadGenerator:
         role: str,
         partner: int,
         balance_delta: int,
+        write_id: str,
     ) -> int:
         """Send a write, retrying on PAUSED_ERR."""
         data_b64 = base64.b64encode(data).decode("ascii")
@@ -471,6 +485,7 @@ class WorkloadGenerator:
                 role=role,
                 partner=partner,
                 balance_delta=balance_delta,
+                write_id=write_id,
             )
 
             if resp is None:

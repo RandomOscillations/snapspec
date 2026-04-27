@@ -224,6 +224,11 @@ class StorageNode:
         # Archive metadata: maps archive_path -> snapshot-time balance
         self._archive_balances: dict[str, int] = {}
 
+        # Idempotency cache for WRITE requests. Cross-node token transfer
+        # writes carry stable ids so reconnect/retry cannot double-apply a
+        # balance delta if the original ACK was lost.
+        self._applied_write_acks: dict[str, dict[str, Any]] = {}
+
         # Snapshot ground truth: maps snapshot_ts -> {block_id: bytes}
         # Captured at snapshot creation for restore verification
         self._snapshot_ground_truth: dict[int, dict[int, bytes]] = {}
@@ -516,7 +521,47 @@ class StorageNode:
                           original_msg: dict, detail: str):
         """Send an error response."""
         ts = original_msg.get("logical_timestamp", 0)
-        await self._send(writer, MessageType.ACK, ts, error=detail)
+        await self._send(writer, MessageType.ERROR, ts, error=detail)
+
+    def _write_dedupe_key(self, msg: dict) -> str | None:
+        write_id = msg.get("write_id")
+        if write_id:
+            return str(write_id)
+
+        dep_tag = int(msg.get("dep_tag", 0) or 0)
+        role = msg.get("role", "NONE")
+        if dep_tag <= 0 or role == "NONE":
+            return None
+
+        partner = msg.get("partner", -1)
+        return f"transfer:{dep_tag}:{role}:node:{self.node_id}:partner:{partner}"
+
+    async def _send_cached_write_ack(
+        self,
+        writer: asyncio.StreamWriter,
+        msg: dict,
+        write_key: str,
+    ) -> bool:
+        cached = self._applied_write_acks.get(write_key)
+        if cached is None:
+            return False
+        await self._send(
+            writer,
+            MessageType.WRITE_ACK,
+            msg["logical_timestamp"],
+            block_id=cached["block_id"],
+            write_timestamp=cached["write_timestamp"],
+            duplicate=True,
+        )
+        return True
+
+    def _record_write_ack(self, write_key: str | None, block_id: int, write_ts: int):
+        if write_key is None:
+            return
+        self._applied_write_acks[write_key] = {
+            "block_id": block_id,
+            "write_timestamp": write_ts,
+        }
 
     def _capture_ground_truth(self, snapshot_ts: int):
         """Read all blocks right after create_snapshot() to record ground truth.
@@ -550,6 +595,11 @@ class StorageNode:
             dep_tag = msg.get("dep_tag", 0)
             role_str = msg.get("role", "NONE")
             partner = msg.get("partner", -1)
+            write_key = self._write_dedupe_key(msg)
+            if write_key is not None and await self._send_cached_write_ack(
+                writer, msg, write_key
+            ):
+                return
 
             # Write to block store using the node's HLC (already merged with
             # the sender's timestamp on message receive). This guarantees the
@@ -568,6 +618,7 @@ class StorageNode:
             # Update token balance
             if "balance_delta" in msg:
                 self._balance += msg["balance_delta"]
+            self._record_write_ack(write_key, block_id, node_ts)
 
         await self._send(
             writer,
@@ -864,6 +915,7 @@ class StorageNode:
             self.delta_blocks_at_discard = []
             self._archive_balances = {}
             self._snapshot_ground_truth = {}
+            self._applied_write_acks = {}
             self._persist_runtime_state()
 
         log_event(
@@ -1022,6 +1074,7 @@ class StorageNode:
                 self.writes_during_snapshot = 0
                 self.delta_blocks_at_discard = []
                 self._snapshot_ground_truth = {}
+                self._applied_write_acks = {}
                 self._persist_runtime_state()
                 restored = True
 

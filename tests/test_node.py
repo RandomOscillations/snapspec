@@ -247,6 +247,7 @@ class TestStateMachine:
         try:
             conn = await _connect(node)
             resp = await conn.send_and_receive(MessageType.COMMIT, 1)
+            assert resp["type"] == "ERROR"
             assert "error" in resp
             await conn.close()
         finally:
@@ -258,6 +259,7 @@ class TestStateMachine:
         try:
             conn = await _connect(node)
             resp = await conn.send_and_receive(MessageType.ABORT, 1)
+            assert resp["type"] == "ERROR"
             assert "error" in resp
             await conn.close()
         finally:
@@ -364,6 +366,35 @@ class TestBalanceUpdate:
                 balance_delta=50,
             )
             assert node._balance == 950
+
+            await conn.close()
+        finally:
+            await node.stop()
+
+    @pytest.mark.asyncio
+    async def test_duplicate_transfer_write_does_not_apply_balance_twice(self, block_store):
+        node = await _start_node(block_store)
+        try:
+            conn = await _connect(node)
+
+            data_b64 = base64.b64encode(b"\x03" * 64).decode("ascii")
+            kwargs = {
+                "block_id": 0,
+                "data": data_b64,
+                "dep_tag": 123,
+                "role": "CAUSE",
+                "partner": 1,
+                "balance_delta": -100,
+                "write_id": "transfer:0:1:123:CAUSE",
+            }
+            first = await conn.send_and_receive(MessageType.WRITE, 1, **kwargs)
+            second = await conn.send_and_receive(MessageType.WRITE, 2, **kwargs)
+
+            assert first["type"] == "WRITE_ACK"
+            assert second["type"] == "WRITE_ACK"
+            assert second["duplicate"] is True
+            assert node._balance == 900
+            assert node.total_writes == 1
 
             await conn.close()
         finally:

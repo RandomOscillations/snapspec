@@ -42,6 +42,14 @@ _PAUSED_RETRY_DELAY_S = 0.005
 _WRITECHECK_PENALTY = 100
 
 
+def _transfer_write_id(source: int, dest: int, dep_tag: int, role: str) -> str:
+    return f"smallbank-transfer:{source}:{dest}:{dep_tag}:{role}"
+
+
+def _local_write_id(node_id: int, ts: int, block_id: int, txn_type: str) -> str:
+    return f"smallbank-local:{node_id}:{ts}:{block_id}:{txn_type}"
+
+
 class TxnType(str, Enum):
     """SmallBank transaction types."""
     BALANCE = "Balance"
@@ -372,6 +380,9 @@ class SmallBankWorkload:
             partner=dest_nid,
             balance_delta=-amount,
             txn_type=TxnType.AMALGAMATE.value,
+            write_id=_transfer_write_id(
+                source_nid, dest_nid, dep_tag, "CAUSE"
+            ),
         )
 
         if self._effect_delay_s > 0:
@@ -389,6 +400,9 @@ class SmallBankWorkload:
             partner=source_nid,
             balance_delta=amount,
             txn_type=TxnType.AMALGAMATE.value,
+            write_id=_transfer_write_id(
+                source_nid, dest_nid, dep_tag, "EFFECT"
+            ),
         )
 
         self._balances[source_nid] -= amount
@@ -434,6 +448,9 @@ class SmallBankWorkload:
             partner=dest_nid,
             balance_delta=-amount,
             txn_type=TxnType.SEND_PAYMENT.value,
+            write_id=_transfer_write_id(
+                source_nid, dest_nid, dep_tag, "CAUSE"
+            ),
         )
 
         if self._effect_delay_s > 0:
@@ -451,6 +468,9 @@ class SmallBankWorkload:
             partner=source_nid,
             balance_delta=amount,
             txn_type=TxnType.SEND_PAYMENT.value,
+            write_id=_transfer_write_id(
+                source_nid, dest_nid, dep_tag, "EFFECT"
+            ),
         )
 
         self._balances[source_nid] -= amount
@@ -545,6 +565,9 @@ class SmallBankWorkload:
             partner=-1,
             balance_delta=0,
             txn_type=TxnType.DEPOSIT_CHECKING.value,
+            write_id=_local_write_id(
+                node_id, ts, custid, TxnType.DEPOSIT_CHECKING.value
+            ),
         )
 
     async def _do_transact_savings(self, node_id: int, custid: int) -> None:
@@ -567,6 +590,9 @@ class SmallBankWorkload:
             partner=-1,
             balance_delta=0,
             txn_type=TxnType.TRANSACT_SAVINGS.value,
+            write_id=_local_write_id(
+                node_id, ts, custid, TxnType.TRANSACT_SAVINGS.value
+            ),
         )
 
     async def _do_write_check(self, node_id: int, custid: int) -> None:
@@ -589,6 +615,9 @@ class SmallBankWorkload:
             partner=-1,
             balance_delta=0,
             txn_type=TxnType.WRITE_CHECK.value,
+            write_id=_local_write_id(
+                node_id, ts, custid, TxnType.WRITE_CHECK.value
+            ),
         )
 
     # ── Wire helpers ───────────────────────────────────────────────────
@@ -604,6 +633,7 @@ class SmallBankWorkload:
         partner: int,
         balance_delta: int,
         txn_type: str = "",
+        write_id: str = "",
     ):
         """Send a WRITE message, retrying on PAUSED_ERR."""
         data_b64 = base64.b64encode(data).decode("ascii")
@@ -620,6 +650,7 @@ class SmallBankWorkload:
                 partner=partner,
                 balance_delta=balance_delta,
                 txn_type=txn_type,
+                write_id=write_id,
             )
 
             if resp is None:
