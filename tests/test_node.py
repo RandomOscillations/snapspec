@@ -112,6 +112,44 @@ class TestWriteRead:
             await node.stop()
 
     @pytest.mark.asyncio
+    async def test_workload_stats_with_extended_metrics(self, block_store):
+        class FakeWorkload:
+            writes_completed = 7
+            _pending_effects = {101: object(), 102: object()}
+            _running = True
+            metrics_snapshot = {
+                "writes_completed": 999,
+                "paused_retry_count": 3,
+                "paused_wait_s": 0.25,
+                "write_latency_count": 7,
+                "write_latency_sum_ms": 12.5,
+                "write_latency_max_ms": 4.0,
+                "local_write_count": 4,
+                "cross_transfer_count": 3,
+                "cross_transfer_completed": 2,
+                "pending_retry_count": 1,
+            }
+
+        node = await _start_node(block_store)
+        node.set_workload(FakeWorkload())
+        try:
+            conn = await _connect(node)
+            resp = await conn.send_and_receive(MessageType.GET_WORKLOAD_STATS, 1)
+
+            assert resp["type"] == "WORKLOAD_STATS"
+            assert resp["writes_completed"] == 7
+            assert resp["pending_transfers"] == 2
+            assert resp["workload_running"] is True
+            assert resp["workload_registered"] is True
+            assert resp["paused_retry_count"] == 3
+            assert resp["write_latency_max_ms"] == 4.0
+            assert resp["cross_transfer_completed"] == 2
+
+            await conn.close()
+        finally:
+            await node.stop()
+
+    @pytest.mark.asyncio
     async def test_read_unwritten_block_returns_zeros(self, block_store):
         node = await _start_node(block_store)
         try:

@@ -824,7 +824,8 @@ class StorageNode:
             workload_writes = int(getattr(self._local_workload, "writes_completed", 0))
             pending_transfers = len(getattr(self._local_workload, "_pending_effects", {}))
             workload_running = bool(getattr(self._local_workload, "_running", False))
-            workload_metrics = getattr(self._local_workload, "metrics_snapshot", {})
+            workload_metrics = dict(getattr(self._local_workload, "metrics_snapshot", {}))
+            workload_metrics.pop("writes_completed", None)
         await self._send(
             writer,
             MessageType.WORKLOAD_STATS,
