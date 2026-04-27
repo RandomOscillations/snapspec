@@ -109,6 +109,7 @@ class WorkloadGenerator:
         self._transfer_count = 0
         self._transfer_idle = asyncio.Event()
         self._transfer_idle.set()
+        self._pending_flush_lock = asyncio.Lock()
         self._shutdown_timeout_s = 30.0
         self._node_backoff_until: dict[int, float] = {}
 
@@ -245,12 +246,18 @@ class WorkloadGenerator:
             )
 
     async def drain(self):
-        """Stop starting new cross-node transfers and wait for any in-flight transfer to complete.
+        """Stop new cross-node transfers and flush already-debited credits.
 
         Called by the coordinator before PAUSE to ensure no half-completed
         transfers exist when the snapshot is taken.
         """
         self._draining = True
+        await self._transfer_idle.wait()
+        deadline = time.monotonic() + self._shutdown_timeout_s
+        while self._pending_effects and time.monotonic() < deadline:
+            writes = await self._flush_pending_effects()
+            if writes == 0 and self._pending_effects:
+                await asyncio.sleep(_NODE_UNAVAILABLE_SLEEP_S)
         await self._transfer_idle.wait()
 
     def resume_transfers(self):
@@ -316,31 +323,39 @@ class WorkloadGenerator:
             data = os.urandom(self._block_size)
 
             self._transfer_amounts[dep_tag] = amount
-
-            debit_ts = await self._send_write_with_retry(
-                source,
-                block_id,
-                data,
-                self._hlc.tick(),
-                dep_tag=dep_tag,
-                role="CAUSE",
-                partner=dest,
-                balance_delta=-amount,
-                write_id=_transfer_write_id(source, dest, dep_tag, "CAUSE"),
-            )
-
-            self._balances[source] -= amount
-            self._transfer_amounts[dep_tag] = amount
-            self._pending_effects[dep_tag] = PendingTransfer(
+            pending = PendingTransfer(
                 dep_tag=dep_tag,
                 source=source,
                 dest=dest,
                 block_id=block_id,
                 data=data,
                 amount=amount,
-                debit_ts=debit_ts,
             )
-            await self._persist_pending_effect(self._pending_effects[dep_tag])
+            self._pending_effects[dep_tag] = pending
+            await self._persist_pending_effect(pending)
+
+            try:
+                debit_ts = await self._send_write_with_retry(
+                    source,
+                    block_id,
+                    data,
+                    self._hlc.tick(),
+                    dep_tag=dep_tag,
+                    role="CAUSE",
+                    partner=dest,
+                    balance_delta=-amount,
+                    write_id=_transfer_write_id(source, dest, dep_tag, "CAUSE"),
+                )
+            except Exception:
+                self._pending_effects.pop(dep_tag, None)
+                self._transfer_amounts.pop(dep_tag, None)
+                await self._discard_pending_effect(dep_tag)
+                raise
+
+            self._balances[source] -= amount
+            self._transfer_amounts[dep_tag] = amount
+            pending.debit_ts = debit_ts
+            await self._persist_pending_effect(pending)
             log_event(
                 logger,
                 component="workload",
@@ -362,12 +377,13 @@ class WorkloadGenerator:
 
     async def _flush_pending_effects(self, max_writes: int | None = None) -> int:
         """Replay pending credit legs whose destination is available."""
-        writes = 0
-        for dep_tag in list(self._pending_effects):
-            if max_writes is not None and writes >= max_writes:
-                break
-            writes += await self._flush_pending_effect(dep_tag)
-        return writes
+        async with self._pending_flush_lock:
+            writes = 0
+            for dep_tag in list(self._pending_effects):
+                if max_writes is not None and writes >= max_writes:
+                    break
+                writes += await self._flush_pending_effect(dep_tag)
+            return writes
 
     async def _flush_pending_effect(self, dep_tag: int) -> int:
         pending = self._pending_effects.get(dep_tag)
@@ -555,7 +571,11 @@ class WorkloadGenerator:
             return
 
         rows = await self._pending_outbox.list_pending(self._outbox_run_id)
+        loaded = 0
         for row in rows:
+            if row.debit_ts <= 0:
+                await self._discard_pending_effect(row.dep_tag)
+                continue
             pending = PendingTransfer(
                 dep_tag=row.dep_tag,
                 source=row.source_node_id,
@@ -571,14 +591,15 @@ class WorkloadGenerator:
             self._dep_tag_counter = max(self._dep_tag_counter, pending.dep_tag)
             if pending.source in self._balances:
                 self._balances[pending.source] -= pending.amount
+            loaded += 1
 
-        if rows:
+        if loaded:
             log_event(
                 logger,
                 component="workload",
                 event="transfer_outbox_loaded",
                 run_id=self._outbox_run_id,
-                pending_transfers=len(rows),
+                pending_transfers=loaded,
                 dep_tags=[row.dep_tag for row in rows[:10]],
             )
 
@@ -606,3 +627,8 @@ class WorkloadGenerator:
             self._outbox_run_id,
             pending.dep_tag,
         )
+
+    async def _discard_pending_effect(self, dep_tag: int):
+        if self._pending_outbox is None:
+            return
+        await self._pending_outbox.discard_pending(self._outbox_run_id, dep_tag)

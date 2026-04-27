@@ -107,6 +107,7 @@ class NodeWorkload:
         self._task: asyncio.Task | None = None
         self._transfer_idle = asyncio.Event()
         self._transfer_idle.set()
+        self._pending_flush_lock = asyncio.Lock()
 
     def tick(self) -> int:
         """Advance and return the HLC timestamp."""
@@ -210,8 +211,14 @@ class NodeWorkload:
         )
 
     async def drain(self):
-        """Stop new cross-node transfers and wait for an in-flight one."""
+        """Stop new cross-node transfers and flush already-debited credits."""
         self._draining = True
+        await self._transfer_idle.wait()
+        deadline = time.monotonic() + _SHUTDOWN_TIMEOUT_S
+        while self._pending_effects and time.monotonic() < deadline:
+            writes = await self._flush_pending_effects()
+            if writes == 0 and self._pending_effects:
+                await asyncio.sleep(_NODE_UNAVAILABLE_SLEEP_S)
         await self._transfer_idle.wait()
 
     async def pause_all(self):
@@ -347,6 +354,7 @@ class NodeWorkload:
                 debit_ts=0,
             )
             self._pending_effects[dep_tag] = pending
+            await self._persist_pending_effect(pending)
             try:
                 pending.debit_ts = await self._send_write_with_retry(
                     self._local_conn,
@@ -364,6 +372,7 @@ class NodeWorkload:
             except Exception:
                 self._pending_effects.pop(dep_tag, None)
                 self._transfer_amounts.pop(dep_tag, None)
+                await self._discard_pending_effect(dep_tag)
                 raise
 
             self._local_balance -= amount
@@ -375,12 +384,13 @@ class NodeWorkload:
             self._transfer_idle.set()
 
     async def _flush_pending_effects(self, max_writes: int | None = None) -> int:
-        writes = 0
-        for dep_tag in list(self._pending_effects):
-            if max_writes is not None and writes >= max_writes:
-                break
-            writes += await self._flush_pending_effect(dep_tag)
-        return writes
+        async with self._pending_flush_lock:
+            writes = 0
+            for dep_tag in list(self._pending_effects):
+                if max_writes is not None and writes >= max_writes:
+                    break
+                writes += await self._flush_pending_effect(dep_tag)
+            return writes
 
     async def _flush_pending_effect(self, dep_tag: int) -> int:
         pending = self._pending_effects.get(dep_tag)
@@ -529,6 +539,9 @@ class NodeWorkload:
         for row in rows:
             if row.source_node_id != self.node_id:
                 continue
+            if row.debit_ts <= 0:
+                await self._discard_pending_effect(row.dep_tag)
+                continue
             pending = PendingTransfer(
                 dep_tag=row.dep_tag,
                 source=row.source_node_id,
@@ -575,3 +588,8 @@ class NodeWorkload:
         if self._pending_outbox is None:
             return
         await self._pending_outbox.mark_applied(self._outbox_run_id, pending.dep_tag)
+
+    async def _discard_pending_effect(self, dep_tag: int):
+        if self._pending_outbox is None:
+            return
+        await self._pending_outbox.discard_pending(self._outbox_run_id, dep_tag)

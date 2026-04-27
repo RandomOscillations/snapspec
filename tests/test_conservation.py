@@ -138,6 +138,7 @@ class TestConservation:
                 "source_node_id": 0,
                 "dest_node_id": 1,
                 "amount": 1000,
+                "debit_ts": 5,
             }
         }
         result = validate_conservation(
@@ -146,9 +147,31 @@ class TestConservation:
             {42: 1000},
             TOTAL,
             pending_transfers=pending,
+            snapshot_ts=10,
         )
         assert result.valid
         assert result.in_transit_total == 1000
+
+    def test_pending_outbox_without_debit_timestamp_is_not_in_transit(self):
+        balances = [499_000, 500_000]
+        pending = {
+            42: {
+                "source_node_id": 0,
+                "dest_node_id": 1,
+                "amount": 1000,
+                "debit_ts": 0,
+            }
+        }
+        result = validate_conservation(
+            balances,
+            [[], []],
+            {42: 1000},
+            TOTAL,
+            pending_transfers=pending,
+            snapshot_ts=10,
+        )
+        assert not result.valid
+        assert result.in_transit_total == 0
 
     def test_pending_outbox_post_snap_debit_not_in_transit(self):
         """A pending credit with post-snapshot CAUSE has not affected the snapshot cut."""

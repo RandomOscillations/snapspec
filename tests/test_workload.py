@@ -213,6 +213,69 @@ class TestCrossNodeTransfer:
                     f"EFFECT ts={roles['EFFECT']}"
                 )
 
+    @pytest.mark.asyncio
+    async def test_drain_flushes_existing_pending_credit(self, nodes):
+        wl = NodeWorkload(
+            node_id=0, local_port=nodes[0].actual_port,
+            remote_nodes=_remote_nodes(nodes, 0),
+            write_rate=1, cross_node_ratio=0.0,
+            initial_balance=10_000, total_tokens=30_000, num_nodes=NUM_NODES,
+            block_size=64, total_blocks=32,
+        )
+        await wl.start()
+        try:
+            pending = PendingTransfer(
+                dep_tag=777,
+                source=0,
+                dest=1,
+                block_id=7,
+                data=b"p" * 64,
+                amount=123,
+                debit_ts=1,
+            )
+            wl._pending_effects[pending.dep_tag] = pending
+            wl._transfer_amounts[pending.dep_tag] = pending.amount
+
+            await wl.drain()
+
+            assert wl.pending_transfer_records == {}
+            assert nodes[1]._balance == 10_123
+        finally:
+            await wl.stop()
+
+    @pytest.mark.asyncio
+    async def test_outbox_intent_without_debit_is_not_replayed(self, nodes, tmp_path):
+        outbox = PendingTransferOutbox.for_sqlite(str(tmp_path / "outbox.db"))
+        await outbox.upsert_pending(
+            PendingTransferOutboxRow(
+                run_id="node-0",
+                dep_tag=888,
+                source_node_id=0,
+                dest_node_id=1,
+                block_id=7,
+                data=b"p" * 64,
+                amount=123,
+                debit_ts=0,
+            )
+        )
+
+        wl = NodeWorkload(
+            node_id=0, local_port=nodes[0].actual_port,
+            remote_nodes=_remote_nodes(nodes, 0),
+            write_rate=1, cross_node_ratio=0.0,
+            initial_balance=10_000, total_tokens=30_000, num_nodes=NUM_NODES,
+            block_size=64, total_blocks=32,
+            pending_outbox=outbox,
+            outbox_run_id="node-0",
+        )
+        await wl.start()
+        try:
+            assert wl.pending_transfer_records == {}
+            assert nodes[1]._balance == 10_000
+            assert await outbox.list_pending("node-0") == []
+        finally:
+            await wl.stop()
+
 
 class TestPausedRetry:
     @pytest.mark.asyncio

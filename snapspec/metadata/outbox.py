@@ -114,6 +114,14 @@ class PendingTransferOutbox:
             else:
                 await asyncio.to_thread(self._mark_applied_sqlite, run_id, dep_tag)
 
+    async def discard_pending(self, run_id: str, dep_tag: int):
+        await self.start()
+        async with self._lock:
+            if self._mysql_pool is not None:
+                await self._discard_pending_mysql(run_id, dep_tag)
+            else:
+                await asyncio.to_thread(self._discard_pending_sqlite, run_id, dep_tag)
+
     async def clear_pending(self, run_id: str):
         """Discard pending effects for a run after rolling back to a global snapshot."""
         await self.start()
@@ -263,6 +271,19 @@ class PendingTransferOutbox:
         )
         self._sqlite_conn.commit()
 
+    def _discard_pending_sqlite(self, run_id: str, dep_tag: int):
+        if self._sqlite_conn is None:
+            raise RuntimeError("SQLite pending transfer outbox is not started")
+        self._sqlite_conn.execute(
+            f"""
+            UPDATE {self._table_name}
+            SET status = 'DISCARDED', updated_at = CURRENT_TIMESTAMP
+            WHERE run_id = ? AND dep_tag = ? AND status = 'PENDING'
+            """,
+            (run_id, dep_tag),
+        )
+        self._sqlite_conn.commit()
+
     def _clear_pending_sqlite(self, run_id: str):
         if self._sqlite_conn is None:
             raise RuntimeError("SQLite pending transfer outbox is not started")
@@ -390,6 +411,20 @@ class PendingTransferOutbox:
                     UPDATE {self._table_name}
                     SET status = 'APPLIED'
                     WHERE run_id = %s AND dep_tag = %s
+                    """,
+                    (run_id, dep_tag),
+                )
+
+    async def _discard_pending_mysql(self, run_id: str, dep_tag: int):
+        if self._mysql_pool is None:
+            raise RuntimeError("MySQL pending transfer outbox is not started")
+        async with self._mysql_pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"""
+                    UPDATE {self._table_name}
+                    SET status = 'DISCARDED'
+                    WHERE run_id = %s AND dep_tag = %s AND status = 'PENDING'
                     """,
                     (run_id, dep_tag),
                 )

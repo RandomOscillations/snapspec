@@ -112,7 +112,8 @@ def validate_conservation(
         # credit is not in-transit for this snapshot cut.
         debit_ts = int(pending.get("debit_ts", 0))
         if (
-            "CAUSE" in post_roles
+            debit_ts <= 0
+            or "CAUSE" in post_roles
             or "EFFECT" in post_roles
             or (snapshot_ts is not None and debit_ts > snapshot_ts)
         ):
