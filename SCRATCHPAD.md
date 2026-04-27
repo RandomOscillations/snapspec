@@ -17,7 +17,7 @@
 - [x] Speculative strategy (with retry loop + two-phase fallback) *(Person C — done + integration tested)*
 - [ ] Workload generator (token transfers, configurable cross-node ratio) *(Person D)*
 - [x] Consistency validation (causal dependency check + token conservation) *(Person C — done + unit tested)*
-- [ ] Metrics collection (per-snapshot + continuous + per-run summary) *(Person D)*
+- [x] Metrics collection (per-snapshot + continuous + per-run summary) *(Person D - extended CSVs for baseline, snapshots, workload samples, recovery/accounting timings, control bytes)*
 
 ### Evaluation (Base)
 - [ ] Microbenchmark suite (ROW, COW, Full-Copy characterization)
@@ -122,4 +122,4 @@ _Update this section as work progresses. Format: `[DATE] What was done.`_
 
 - `[2026-03-21]` Repo scaffolded. Person A: C++ block stores (ROW, COW, Full-Copy) + headers + pybind11 bindings + gtest unit tests. Person C: Strategy interface contract, 3 coordination strategies (pause_and_snap, two_phase, speculative), causal validation, token conservation validation, comprehensive pytest suite. Adaptive strategy placeholder (Extension 2).
 - `[2026-03-21]` Person B complete: TCP network layer (protocol.py, connection.py), StorageNode server with state machine and all 10 message handlers (node/server.py), Coordinator skeleton implementing CoordinatorProtocol (coordinator.py). Fixed speculative.py _should_fallback_early to use total_blocks_per_node instead of hardcoded 1000. Added 30 tests (protocol, node, coordinator). All 59 tests passing. FM1/FM2/FM4/FM5/FM6 mitigated. Persons A, B, C core implementation complete — remaining: Person D (workload generator, metrics, experiments).
-
+- `[2026-04-27]` Added paper-oriented experiment metrics: no-snapshot baseline, per-snapshot CSVs, per-sample workload CSVs, control-byte accounting, phase timing, write-log sizing, workload latency/retry/cross-transfer counters. Verified with pytest and three-container Docker launch under netem; saved verification artifacts in results/docker_launch_stress/.
