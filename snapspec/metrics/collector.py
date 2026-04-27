@@ -51,6 +51,15 @@ class _SnapshotRecord:
     balance_sum: int | None = None
     in_transit_total: int | None = None
     message_count: int | None = None
+    control_bytes: int | None = None
+    drain_ms: float | None = None
+    finalize_ms: float | None = None
+    validation_ms: float | None = None
+    commit_ms: float | None = None
+    recovery_ms: float | None = None
+    write_log_entries: int | None = None
+    write_log_bytes: int | None = None
+    dependency_tags_checked: int | None = None
 
 
 @dataclass
@@ -58,6 +67,18 @@ class _ThroughputSample:
     timestamp: float  # monotonic
     writes_per_sec: float
     coordinator_cpu_pct: float
+    total_writes: int = 0
+    workload_running_nodes: int = 0
+    pending_transfers: int = 0
+    paused_retry_count: int = 0
+    paused_wait_s: float = 0.0
+    write_latency_count: int = 0
+    write_latency_sum_ms: float = 0.0
+    write_latency_max_ms: float = 0.0
+    local_write_count: int = 0
+    cross_transfer_count: int = 0
+    cross_transfer_completed: int = 0
+    pending_retry_count: int = 0
 
 
 class MetricsCollector:
@@ -119,6 +140,15 @@ class MetricsCollector:
             balance_sum=result.balance_sum,
             in_transit_total=result.in_transit_total,
             message_count=result.message_count,
+            control_bytes=result.control_bytes,
+            drain_ms=result.drain_ms,
+            finalize_ms=result.finalize_ms,
+            validation_ms=result.validation_ms,
+            commit_ms=result.commit_ms,
+            recovery_ms=result.recovery_ms,
+            write_log_entries=result.write_log_entries,
+            write_log_bytes=result.write_log_bytes,
+            dependency_tags_checked=result.dependency_tags_checked,
         ))
 
     def snapshot_counts(self) -> dict[str, int]:
@@ -142,12 +172,25 @@ class MetricsCollector:
         self,
         writes_per_sec: float,
         coordinator_cpu_pct: float = -1.0,
+        **kwargs,
     ) -> None:
         self._latest_throughput_wps = writes_per_sec
         self._throughput_samples.append(_ThroughputSample(
             timestamp=time.monotonic(),
             writes_per_sec=writes_per_sec,
             coordinator_cpu_pct=coordinator_cpu_pct,
+            total_writes=int(kwargs.get("total_writes", 0)),
+            workload_running_nodes=int(kwargs.get("workload_running_nodes", 0)),
+            pending_transfers=int(kwargs.get("pending_transfers", 0)),
+            paused_retry_count=int(kwargs.get("paused_retry_count", 0)),
+            paused_wait_s=float(kwargs.get("paused_wait_s", 0.0)),
+            write_latency_count=int(kwargs.get("write_latency_count", 0)),
+            write_latency_sum_ms=float(kwargs.get("write_latency_sum_ms", 0.0)),
+            write_latency_max_ms=float(kwargs.get("write_latency_max_ms", 0.0)),
+            local_write_count=int(kwargs.get("local_write_count", 0)),
+            cross_transfer_count=int(kwargs.get("cross_transfer_count", 0)),
+            cross_transfer_completed=int(kwargs.get("cross_transfer_completed", 0)),
+            pending_retry_count=int(kwargs.get("pending_retry_count", 0)),
         ))
 
     def latest_conservation_rate(self) -> float | None:
@@ -371,12 +414,71 @@ class MetricsCollector:
             else:
                 summary["avg_messages_per_snapshot"] = 0.0
                 summary["total_control_messages"] = 0.0
+            byte_counts = [s.control_bytes for s in committed_snaps if s.control_bytes is not None]
+            summary["avg_control_bytes_per_snapshot"] = (
+                sum(byte_counts) / len(byte_counts) if byte_counts else 0.0
+            )
+            summary["total_control_bytes"] = sum(byte_counts) if byte_counts else 0.0
+            for attr, metric in [
+                ("drain_ms", "avg_drain_ms"),
+                ("finalize_ms", "avg_finalize_ms"),
+                ("validation_ms", "avg_validation_ms"),
+                ("commit_ms", "avg_commit_ms"),
+                ("recovery_ms", "avg_recovery_ms"),
+                ("write_log_entries", "avg_write_log_entries"),
+                ("write_log_bytes", "avg_write_log_bytes"),
+                ("dependency_tags_checked", "avg_dependency_tags_checked"),
+            ]:
+                values = [
+                    getattr(s, attr)
+                    for s in committed_snaps
+                    if getattr(s, attr) is not None
+                ]
+                summary[metric] = sum(values) / len(values) if values else 0.0
         else:
             summary["avg_convergence_ms"] = 0.0
             summary["avg_balance_sum"] = 0.0
             summary["avg_in_transit"] = 0.0
             summary["avg_messages_per_snapshot"] = 0.0
             summary["total_control_messages"] = 0.0
+            summary["avg_control_bytes_per_snapshot"] = 0.0
+            summary["total_control_bytes"] = 0.0
+            summary["avg_drain_ms"] = 0.0
+            summary["avg_finalize_ms"] = 0.0
+            summary["avg_validation_ms"] = 0.0
+            summary["avg_commit_ms"] = 0.0
+            summary["avg_recovery_ms"] = 0.0
+            summary["avg_write_log_entries"] = 0.0
+            summary["avg_write_log_bytes"] = 0.0
+            summary["avg_dependency_tags_checked"] = 0.0
+
+        if self._throughput_samples:
+            last = self._throughput_samples[-1]
+            first = self._throughput_samples[0]
+            summary["max_pending_transfers"] = max(s.pending_transfers for s in self._throughput_samples)
+            summary["max_write_latency_ms"] = max(s.write_latency_max_ms for s in self._throughput_samples)
+            summary["total_paused_retries"] = float(last.paused_retry_count)
+            summary["total_paused_wait_s"] = float(last.paused_wait_s)
+            summary["total_local_writes"] = float(last.local_write_count)
+            summary["total_cross_transfers"] = float(last.cross_transfer_count)
+            summary["total_cross_transfers_completed"] = float(last.cross_transfer_completed)
+            summary["total_pending_retries"] = float(last.pending_retry_count)
+            latency_delta_count = last.write_latency_count - first.write_latency_count
+            latency_delta_sum = last.write_latency_sum_ms - first.write_latency_sum_ms
+            summary["avg_write_latency_ms"] = (
+                latency_delta_sum / latency_delta_count
+                if latency_delta_count > 0 else 0.0
+            )
+        else:
+            summary["max_pending_transfers"] = 0.0
+            summary["max_write_latency_ms"] = 0.0
+            summary["total_paused_retries"] = 0.0
+            summary["total_paused_wait_s"] = 0.0
+            summary["total_local_writes"] = 0.0
+            summary["total_cross_transfers"] = 0.0
+            summary["total_cross_transfers_completed"] = 0.0
+            summary["total_pending_retries"] = 0.0
+            summary["avg_write_latency_ms"] = 0.0
 
         return summary
 
@@ -411,3 +513,91 @@ class MetricsCollector:
             writer.writerows(rows)
 
         logger.info("Metrics written to %s (%d rows)", path, len(rows))
+
+    def write_snapshot_csv(self, path: str) -> None:
+        """Write one row per snapshot attempt."""
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        fieldnames = [
+            "experiment", "config", "param_value", "rep",
+            "snapshot_id", "logical_ts", "success", "skipped", "retries",
+            "duration_ms", "causal_consistent", "causal_violation_count",
+            "conservation_holds", "recovery_verified",
+            "recovery_conservation_holds", "convergence_ms", "drain_ms",
+            "finalize_ms", "validation_ms", "commit_ms", "recovery_ms",
+            "balance_sum", "in_transit_total", "message_count",
+            "control_bytes", "write_log_entries", "write_log_bytes",
+            "dependency_tags_checked", "delta_blocks",
+        ]
+        with open(path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for s in self._snapshots:
+                writer.writerow({
+                    "experiment": self.experiment,
+                    "config": self.config,
+                    "param_value": self.param_value,
+                    "rep": self.rep,
+                    "snapshot_id": s.snapshot_id,
+                    "logical_ts": s.logical_ts,
+                    "success": s.success,
+                    "skipped": s.skipped,
+                    "retries": s.retries,
+                    "duration_ms": s.duration_ms,
+                    "causal_consistent": s.causal_consistent,
+                    "causal_violation_count": s.causal_violation_count,
+                    "conservation_holds": s.conservation_holds,
+                    "recovery_verified": s.recovery_verified,
+                    "recovery_conservation_holds": s.recovery_conservation_holds,
+                    "convergence_ms": s.convergence_ms,
+                    "drain_ms": s.drain_ms,
+                    "finalize_ms": s.finalize_ms,
+                    "validation_ms": s.validation_ms,
+                    "commit_ms": s.commit_ms,
+                    "recovery_ms": s.recovery_ms,
+                    "balance_sum": s.balance_sum,
+                    "in_transit_total": s.in_transit_total,
+                    "message_count": s.message_count,
+                    "control_bytes": s.control_bytes,
+                    "write_log_entries": s.write_log_entries,
+                    "write_log_bytes": s.write_log_bytes,
+                    "dependency_tags_checked": s.dependency_tags_checked,
+                    "delta_blocks": ";".join(str(d) for d in (s.delta_blocks or [])),
+                })
+
+    def write_samples_csv(self, path: str) -> None:
+        """Write one row per throughput/workload sample."""
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        fieldnames = [
+            "experiment", "config", "param_value", "rep", "timestamp",
+            "writes_per_sec", "coordinator_cpu_pct", "total_writes",
+            "workload_running_nodes", "pending_transfers",
+            "paused_retry_count", "paused_wait_s", "write_latency_count",
+            "write_latency_sum_ms", "write_latency_max_ms",
+            "local_write_count", "cross_transfer_count",
+            "cross_transfer_completed", "pending_retry_count",
+        ]
+        with open(path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for s in self._throughput_samples:
+                writer.writerow({
+                    "experiment": self.experiment,
+                    "config": self.config,
+                    "param_value": self.param_value,
+                    "rep": self.rep,
+                    "timestamp": s.timestamp,
+                    "writes_per_sec": s.writes_per_sec,
+                    "coordinator_cpu_pct": s.coordinator_cpu_pct,
+                    "total_writes": s.total_writes,
+                    "workload_running_nodes": s.workload_running_nodes,
+                    "pending_transfers": s.pending_transfers,
+                    "paused_retry_count": s.paused_retry_count,
+                    "paused_wait_s": s.paused_wait_s,
+                    "write_latency_count": s.write_latency_count,
+                    "write_latency_sum_ms": s.write_latency_sum_ms,
+                    "write_latency_max_ms": s.write_latency_max_ms,
+                    "local_write_count": s.local_write_count,
+                    "cross_transfer_count": s.cross_transfer_count,
+                    "cross_transfer_completed": s.cross_transfer_completed,
+                    "pending_retry_count": s.pending_retry_count,
+                })

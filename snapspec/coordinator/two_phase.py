@@ -25,6 +25,7 @@ writes continue while cross-node transfers are drained.
 
 from __future__ import annotations
 import asyncio
+import json
 import logging
 import time
 from typing import TYPE_CHECKING
@@ -68,7 +69,9 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     coordinator.reset_message_counter()
 
     # Phase 0: quiesce cross-node transfer pairs only. Local writes continue.
+    drain_start = time.monotonic()
     await coordinator.drain_workload()
+    drain_ms = (time.monotonic() - drain_start) * 1000
 
     # Phase 1: Prepare — all nodes take a snapshot, writes continue to delta
     convergence_start = time.monotonic()
@@ -92,11 +95,13 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
         await asyncio.sleep(coordinator.validation_grace_s)
 
     # Close the post-snapshot write window, then collect final logs + balances.
+    finalize_start = time.monotonic()
     all_logs, snapshot_balances, responding_node_ids = (
         await coordinator.collect_finalized_write_logs_and_balances_parallel(
             ts, node_ids=participant_node_ids
         )
     )
+    finalize_ms = (time.monotonic() - finalize_start) * 1000
     if len(responding_node_ids) < coordinator.minimum_snapshot_nodes():
         await coordinator.send_all(_ABORT, ts, node_ids=participant_node_ids)
         coordinator.resume_workload()
@@ -108,16 +113,20 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
         )
 
     # Validate causal consistency
+    validation_start = time.monotonic()
     causal_result, violations = validate_causal(
         all_logs, participating_node_ids=set(responding_node_ids)
     )
     causal_ok = causal_result == ValidationResult.CONSISTENT
+    validation_ms = (time.monotonic() - validation_start) * 1000
 
     # Phase 2: Commit or Abort
     if causal_ok:
+        commit_start = time.monotonic()
         commit_responses = await coordinator.send_all(
             _COMMIT, ts, node_ids=responding_node_ids
         )
+        commit_ms = (time.monotonic() - commit_start) * 1000
         if not all(r is not None and r.get("type") == "ACK" for r in commit_responses):
             logger.warning("Two-phase: some nodes failed COMMIT at ts=%d", ts)
             await coordinator.send_all(_ABORT, ts, node_ids=participant_node_ids)
@@ -159,20 +168,25 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                     cons.in_transit_tags[:10],
                     cons.post_role_samples,
                 )
+            validation_ms = (time.monotonic() - validation_start) * 1000
 
         # Verify restore — proves archive can restore exact snapshot state
         recovery_verified = None
         recovery_balance_sum = None
         recovery_conservation = None
+        recovery_ms = None
         if coordinator.expected_total > 0:
+            recovery_start = time.monotonic()
             rv = await coordinator.verify_snapshot_recovery(
                 ts, node_ids=responding_node_ids
             )
+            recovery_ms = (time.monotonic() - recovery_start) * 1000
             recovery_verified = rv["restore_verified"]
             recovery_balance_sum = rv["balance_sum"]
             recovery_conservation = rv.get("conservation_holds")
 
         coordinator.resume_workload()
+        log_entries, log_bytes, dependency_tags = _log_stats(all_logs)
 
         return SnapshotResult(
             success=True,
@@ -186,8 +200,17 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             convergence_ms=convergence_ms,
             balance_sum=balance_sum,
             in_transit_total=in_transit_total,
+            control_bytes=coordinator.current_message_bytes(),
             message_count=coordinator.reset_message_counter(),
             recovery_conservation_holds=recovery_conservation,
+            drain_ms=drain_ms,
+            finalize_ms=finalize_ms,
+            validation_ms=validation_ms,
+            commit_ms=commit_ms,
+            recovery_ms=recovery_ms,
+            write_log_entries=log_entries,
+            write_log_bytes=log_bytes,
+            dependency_tags_checked=dependency_tags,
         )
     else:
         await coordinator.send_all(_ABORT, ts, node_ids=participant_node_ids)
@@ -207,3 +230,13 @@ def _extract_archive_paths(responses: list[dict | None]) -> list[str]:
         for response in responses
         if response is not None and response.get("archive_path")
     ]
+
+
+def _log_stats(all_logs: list[list[dict]]) -> tuple[int, int, int]:
+    entries = [entry for node_log in all_logs for entry in node_log]
+    tags = {
+        int(entry.get("dependency_tag", 0))
+        for entry in entries
+        if int(entry.get("dependency_tag", 0) or 0) > 0
+    }
+    return len(entries), len(json.dumps(entries, default=str)), len(tags)

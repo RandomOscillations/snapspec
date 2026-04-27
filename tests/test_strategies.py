@@ -95,6 +95,9 @@ class MockCoordinator:
     def reset_message_counter(self) -> int:
         return 0
 
+    def current_message_bytes(self) -> int:
+        return 0
+
     def was_called(self, msg_type: str) -> bool:
         return any(t == msg_type for t, _ in self._call_log)
 

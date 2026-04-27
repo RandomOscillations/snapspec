@@ -15,6 +15,7 @@ Person D hooks into metrics via the on_snapshot_complete callback.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from typing import Any, Callable
@@ -104,6 +105,7 @@ class Coordinator:
         self._hlc = HybridLogicalClock()
         self._snapshot_counter: int = 0
         self._message_counter: int = 0  # control messages sent per snapshot
+        self._message_bytes: int = 0
         self._had_node_failure: bool = False  # set if any node was ever unhealthy
 
         # Snapshot loop control
@@ -144,6 +146,10 @@ class Coordinator:
         mt = MessageType(msg_type)
         connections = self._select_connections(node_ids)
         self._message_counter += len(connections)  # count outgoing messages
+        self._message_bytes += sum(
+            self._estimate_message_bytes(mt, ts, **kwargs)
+            for _ in connections
+        )
         results = await asyncio.gather(
             *[
                 self._send_with_timeout(
@@ -153,13 +159,23 @@ class Coordinator:
             ]
         )
         self._message_counter += sum(1 for r in results if r is not None)  # count responses
+        self._message_bytes += sum(
+            self._estimate_response_bytes(r)
+            for r in results
+            if r is not None
+        )
         return list(results)
 
     def reset_message_counter(self) -> int:
         """Reset and return the message count (call before each snapshot)."""
         count = self._message_counter
         self._message_counter = 0
+        self._message_bytes = 0
         return count
+
+    def current_message_bytes(self) -> int:
+        """Return counted control bytes for the current snapshot window."""
+        return self._message_bytes
 
     async def collect_write_logs_parallel(
         self, ts: int, node_ids: list[int] | None = None
@@ -232,6 +248,8 @@ class Coordinator:
         connections = self._select_connections(node_ids)
 
         async def _collect_one(conn: NodeConnection) -> tuple[int, list[dict], int, dict, dict, bool]:
+            self._message_counter += 1
+            self._message_bytes += self._estimate_message_bytes(msg_type, ts)
             resp = await self._send_with_timeout(
                 conn,
                 msg_type,
@@ -241,6 +259,8 @@ class Coordinator:
             )
             if resp is None:
                 return conn.node_id, [], 0, {}, {}, False
+            self._message_counter += 1
+            self._message_bytes += self._estimate_response_bytes(resp)
             entries = [
                 {**entry, "node_id": conn.node_id}
                 for entry in resp.get("entries", [])
@@ -275,6 +295,21 @@ class Coordinator:
         self._remote_pending_transfers = fresh_pending
         self._update_last_known_balances(responding_node_ids, snapshot_balances)
         return all_logs, snapshot_balances, responding_node_ids
+
+    def _estimate_message_bytes(
+        self,
+        msg_type: MessageType,
+        ts: int,
+        **kwargs,
+    ) -> int:
+        return len(json.dumps({
+            "type": msg_type.value,
+            "logical_timestamp": ts,
+            **kwargs,
+        }, default=str))
+
+    def _estimate_response_bytes(self, response: dict[str, Any]) -> int:
+        return len(json.dumps(response, default=str))
 
     async def verify_snapshot_recovery(
         self,

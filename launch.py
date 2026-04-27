@@ -261,16 +261,50 @@ async def _resume_nodes_after_restore(node_configs: list[dict]) -> None:
     ])
 
 
-async def _cluster_workload_write_count(node_configs: list[dict]) -> int:
+async def _cluster_workload_stats(node_configs: list[dict]) -> dict:
     responses = await asyncio.gather(*[
         _node_rpc(cfg, MessageType.GET_WORKLOAD_STATS)
         for cfg in node_configs
     ])
-    return sum(
-        int(resp.get("writes_completed", 0))
-        for resp in responses
-        if resp is not None and resp.get("type") == MessageType.WORKLOAD_STATS.value
-    )
+    stats = {
+        "writes_completed": 0,
+        "total_writes": 0,
+        "workload_running_nodes": 0,
+        "pending_transfers": 0,
+        "paused_retry_count": 0,
+        "paused_wait_s": 0.0,
+        "write_latency_count": 0,
+        "write_latency_sum_ms": 0.0,
+        "write_latency_max_ms": 0.0,
+        "local_write_count": 0,
+        "cross_transfer_count": 0,
+        "cross_transfer_completed": 0,
+        "pending_retry_count": 0,
+    }
+    for resp in responses:
+        if resp is None or resp.get("type") != MessageType.WORKLOAD_STATS.value:
+            continue
+        stats["writes_completed"] += int(resp.get("writes_completed", 0))
+        stats["total_writes"] += int(resp.get("total_writes", 0))
+        stats["workload_running_nodes"] += int(bool(resp.get("workload_running", False)))
+        stats["pending_transfers"] += int(resp.get("pending_transfers", 0))
+        stats["paused_retry_count"] += int(resp.get("paused_retry_count", 0))
+        stats["paused_wait_s"] += float(resp.get("paused_wait_s", 0.0))
+        stats["write_latency_count"] += int(resp.get("write_latency_count", 0))
+        stats["write_latency_sum_ms"] += float(resp.get("write_latency_sum_ms", 0.0))
+        stats["write_latency_max_ms"] = max(
+            stats["write_latency_max_ms"],
+            float(resp.get("write_latency_max_ms", 0.0)),
+        )
+        stats["local_write_count"] += int(resp.get("local_write_count", 0))
+        stats["cross_transfer_count"] += int(resp.get("cross_transfer_count", 0))
+        stats["cross_transfer_completed"] += int(resp.get("cross_transfer_completed", 0))
+        stats["pending_retry_count"] += int(resp.get("pending_retry_count", 0))
+    return stats
+
+
+async def _cluster_workload_write_count(node_configs: list[dict]) -> int:
+    return int((await _cluster_workload_stats(node_configs))["writes_completed"])
 
 
 async def sample_cluster_throughput(
@@ -279,7 +313,8 @@ async def sample_cluster_throughput(
     stop_event: asyncio.Event,
     interval_s: float = 1.0,
 ) -> None:
-    prev_writes = await _cluster_workload_write_count(node_configs)
+    prev_stats = await _cluster_workload_stats(node_configs)
+    prev_writes = int(prev_stats["writes_completed"])
     prev_t = time.monotonic()
     while not stop_event.is_set():
         try:
@@ -289,10 +324,23 @@ async def sample_cluster_throughput(
             pass
 
         now = time.monotonic()
-        current_writes = await _cluster_workload_write_count(node_configs)
+        stats = await _cluster_workload_stats(node_configs)
+        current_writes = int(stats["writes_completed"])
         elapsed = max(now - prev_t, 1e-9)
         metrics.record_throughput_sample(
-            (current_writes - prev_writes) / elapsed
+            (current_writes - prev_writes) / elapsed,
+            total_writes=stats["total_writes"],
+            workload_running_nodes=stats["workload_running_nodes"],
+            pending_transfers=stats["pending_transfers"],
+            paused_retry_count=stats["paused_retry_count"],
+            paused_wait_s=stats["paused_wait_s"],
+            write_latency_count=stats["write_latency_count"],
+            write_latency_sum_ms=stats["write_latency_sum_ms"],
+            write_latency_max_ms=stats["write_latency_max_ms"],
+            local_write_count=stats["local_write_count"],
+            cross_transfer_count=stats["cross_transfer_count"],
+            cross_transfer_completed=stats["cross_transfer_completed"],
+            pending_retry_count=stats["pending_retry_count"],
         )
         prev_writes = current_writes
         prev_t = now
@@ -400,7 +448,58 @@ async def run_strategy(
     os.makedirs(output_dir, exist_ok=True)
     csv_path = os.path.join(output_dir, f"cluster_{strategy_name}.csv")
     metrics.write_csv(csv_path)
+    metrics.write_snapshot_csv(
+        os.path.join(output_dir, f"cluster_{strategy_name}_snapshots.csv")
+    )
+    metrics.write_samples_csv(
+        os.path.join(output_dir, f"cluster_{strategy_name}_samples.csv")
+    )
 
+    return summary, csv_path
+
+
+async def run_baseline(
+    node_configs: list[dict],
+    cfg: dict,
+    exp_cfg: dict,
+) -> tuple[dict, str]:
+    """Collect workload-only baseline metrics with no snapshot coordinator."""
+    metrics = MetricsCollector(
+        experiment="cluster",
+        config=f"{cfg.get('block_store', 'row')}_baseline",
+        param_value="default",
+        rep=1,
+    )
+    stop = asyncio.Event()
+    task = asyncio.create_task(
+        sample_cluster_throughput(
+            node_configs,
+            metrics,
+            stop,
+            interval_s=float(exp_cfg.get("throughput_sample_interval_s", 1.0)),
+        )
+    )
+    duration_s = float(
+        exp_cfg.get("baseline_duration_s", exp_cfg.get("duration_s", 15))
+    )
+    await asyncio.sleep(duration_s)
+    stop.set()
+    try:
+        await asyncio.wait_for(task, timeout=2.0)
+    except asyncio.TimeoutError:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    output_dir = exp_cfg.get("output_dir", "results")
+    os.makedirs(output_dir, exist_ok=True)
+    csv_path = os.path.join(output_dir, "cluster_baseline.csv")
+    metrics.write_csv(csv_path)
+    metrics.write_samples_csv(os.path.join(output_dir, "cluster_baseline_samples.csv"))
+    summary = metrics.compute_summary()
+    summary["strategy"] = "baseline"
     return summary, csv_path
 
 
@@ -591,6 +690,33 @@ async def run_node(config: dict, node_id: int, node_only: bool = False,
 
         results = {}
         csv_paths = []
+        baseline_summary = None
+        if exp_cfg.get("collect_baseline", True):
+            baseline_duration = float(exp_cfg.get("baseline_duration_s", duration))
+            print(
+                f"  [baseline] collecting no-snapshot metrics for {baseline_duration:g}s...",
+                end="",
+                flush=True,
+            )
+            baseline_exp_cfg = dict(exp_cfg)
+            baseline_exp_cfg["duration_s"] = baseline_duration
+            baseline_summary, baseline_csv = await run_baseline(
+                node_configs, config, baseline_exp_cfg,
+            )
+            csv_paths.append(baseline_csv)
+            csv_paths.append(
+                os.path.join(
+                    baseline_exp_cfg.get("output_dir", "results"),
+                    "cluster_baseline_samples.csv",
+                )
+            )
+            print(
+                " done "
+                f"({baseline_summary.get('avg_throughput_writes_sec', 0):.1f} writes/s)"
+            )
+            print(f"\n  Resetting nodes after baseline...")
+            await reset_nodes(node_configs, balances)
+
         for i, strategy in enumerate(strategies):
             if i > 0:
                 # Reset between strategies
@@ -605,6 +731,9 @@ async def run_node(config: dict, node_id: int, node_only: bool = False,
             )
             results[strategy] = summary
             csv_paths.append(csv_path)
+            output_dir = strategy_exp_cfg.get("output_dir", "results")
+            csv_paths.append(os.path.join(output_dir, f"cluster_{strategy}_snapshots.csv"))
+            csv_paths.append(os.path.join(output_dir, f"cluster_{strategy}_samples.csv"))
             committed = int(summary.get("snapshot_committed", 0))
             total = int(summary.get("snapshot_count", 0))
             recovery = summary.get("recovery_rate")
@@ -615,10 +744,33 @@ async def run_node(config: dict, node_id: int, node_only: bool = False,
         print(f"\n{'='*60}")
         print("  RESULTS")
         print(f"{'='*60}")
+        if baseline_summary is not None:
+            print(f"\n  Baseline: No Snapshot")
+            print(f"  {'-'*50}")
+            print(
+                f"    Throughput:       "
+                f"{baseline_summary.get('avg_throughput_writes_sec', 0):.1f} writes/s"
+            )
+            print(
+                f"    Avg write latency:"
+                f" {baseline_summary.get('avg_write_latency_ms', 0):.2f} ms"
+            )
+            print(
+                f"    Max write latency:"
+                f" {baseline_summary.get('max_write_latency_ms', 0):.2f} ms"
+            )
 
         test_num = 1
         for strategy in results:
             s = results[strategy]
+            baseline_tput = (
+                baseline_summary.get("avg_throughput_writes_sec", 0)
+                if baseline_summary else 0
+            )
+            slowdown = (
+                s.get("avg_throughput_writes_sec", 0) / baseline_tput
+                if baseline_tput > 0 else None
+            )
             label = strategy.replace("_", " ").title().replace("And", "&")
             print(f"\n  Test {test_num}: {label}")
             print(f"  {'-'*50}")
@@ -629,6 +781,7 @@ async def run_node(config: dict, node_id: int, node_only: bool = False,
             print(f"    p50 latency:      {s.get('p50_latency_ms', 0):.2f} ms")
             print(f"    p99 latency:      {s.get('p99_latency_ms', 0):.2f} ms")
             print(f"    Throughput:       {s.get('avg_throughput_writes_sec', 0):.1f} writes/s")
+            print(f"    Tput vs baseline: {fmt_pct(slowdown)}")
             print(f"    Avg retries:      {s.get('avg_retry_rate', 0):.1f}")
             print(f"    Restore verified: {fmt_pct(s.get('recovery_rate'))}")
             test_num += 1

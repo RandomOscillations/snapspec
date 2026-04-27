@@ -103,6 +103,15 @@ class NodeWorkload:
         self._epoch = 0
 
         self._writes_completed = 0
+        self._write_latency_count = 0
+        self._write_latency_sum_ms = 0.0
+        self._write_latency_max_ms = 0.0
+        self._paused_retry_count = 0
+        self._paused_wait_s = 0.0
+        self._local_write_count = 0
+        self._cross_transfer_count = 0
+        self._cross_transfer_completed = 0
+        self._pending_retry_count = 0
         self._running = False
         self._draining = False
         self._task: asyncio.Task | None = None
@@ -134,6 +143,21 @@ class NodeWorkload:
     @property
     def writes_completed(self) -> int:
         return self._writes_completed
+
+    @property
+    def metrics_snapshot(self) -> dict:
+        return {
+            "writes_completed": self._writes_completed,
+            "paused_retry_count": self._paused_retry_count,
+            "paused_wait_s": self._paused_wait_s,
+            "write_latency_count": self._write_latency_count,
+            "write_latency_sum_ms": self._write_latency_sum_ms,
+            "write_latency_max_ms": self._write_latency_max_ms,
+            "local_write_count": self._local_write_count,
+            "cross_transfer_count": self._cross_transfer_count,
+            "cross_transfer_completed": self._cross_transfer_completed,
+            "pending_retry_count": self._pending_retry_count,
+        }
 
     async def start(self):
         """Connect to local/remote nodes and start the write loop."""
@@ -277,6 +301,15 @@ class NodeWorkload:
         self._dep_tag_counter = self.node_id * 1_000_000
         self._epoch += 1
         self._writes_completed = 0
+        self._write_latency_count = 0
+        self._write_latency_sum_ms = 0.0
+        self._write_latency_max_ms = 0.0
+        self._paused_retry_count = 0
+        self._paused_wait_s = 0.0
+        self._local_write_count = 0
+        self._cross_transfer_count = 0
+        self._cross_transfer_completed = 0
+        self._pending_retry_count = 0
         self._transfer_idle.set()
 
         if restart:
@@ -363,6 +396,7 @@ class NodeWorkload:
             data = os.urandom(self._block_size)
 
             self._transfer_amounts[dep_tag] = amount
+            self._cross_transfer_count += 1
             pending = PendingTransfer(
                 dep_tag=dep_tag,
                 source=self.node_id,
@@ -398,6 +432,8 @@ class NodeWorkload:
             await self._persist_pending_effect(pending)
 
             credit_writes = await self._flush_pending_effect(dep_tag)
+            if credit_writes > 0:
+                self._cross_transfer_completed += 1
             return 1 + credit_writes
         finally:
             self._transfer_idle.set()
@@ -441,6 +477,7 @@ class NodeWorkload:
             )
         except Exception as exc:
             pending.attempts += 1
+            self._pending_retry_count += 1
             await self._persist_pending_effect(pending)
             delay = min(
                 _PENDING_RETRY_BASE_S * (2 ** max(0, pending.attempts - 1)),
@@ -483,6 +520,7 @@ class NodeWorkload:
             balance_delta=0,
             write_id=_local_write_id(self.node_id, ts, block_id),
         )
+        self._local_write_count += 1
 
     async def _send_write_with_retry(
         self,
@@ -501,6 +539,7 @@ class NodeWorkload:
             raise ConnectionError("NodeWorkload connection is not initialized")
 
         data_b64 = base64.b64encode(data).decode("ascii")
+        started = time.monotonic()
 
         while True:
             resp = await conn.send_and_receive(
@@ -525,9 +564,17 @@ class NodeWorkload:
                 if remote_ts:
                     self._hlc.receive(remote_ts)
                 self._writes_completed += 1
+                latency_ms = (time.monotonic() - started) * 1000
+                self._write_latency_count += 1
+                self._write_latency_sum_ms += latency_ms
+                self._write_latency_max_ms = max(
+                    self._write_latency_max_ms, latency_ms
+                )
                 return write_ts or remote_ts or ts
 
             if resp.get("type") == MessageType.PAUSED_ERR.value:
+                self._paused_retry_count += 1
+                self._paused_wait_s += _PAUSED_RETRY_DELAY_S
                 await asyncio.sleep(_PAUSED_RETRY_DELAY_S)
                 continue
 

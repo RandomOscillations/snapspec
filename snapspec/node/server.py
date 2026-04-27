@@ -819,10 +819,12 @@ class StorageNode:
         pending_transfers = 0
         workload_running = False
         workload_registered = self._local_workload is not None
+        workload_metrics = {}
         if self._local_workload is not None:
             workload_writes = int(getattr(self._local_workload, "writes_completed", 0))
             pending_transfers = len(getattr(self._local_workload, "_pending_effects", {}))
             workload_running = bool(getattr(self._local_workload, "_running", False))
+            workload_metrics = getattr(self._local_workload, "metrics_snapshot", {})
         await self._send(
             writer,
             MessageType.WORKLOAD_STATS,
@@ -833,6 +835,7 @@ class StorageNode:
             workload_registered=workload_registered,
             node_balance=self._balance,
             total_writes=self.total_writes,
+            **workload_metrics,
         )
 
     async def _handle_commit(self, msg: dict, writer: asyncio.StreamWriter):

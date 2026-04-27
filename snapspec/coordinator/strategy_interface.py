@@ -34,6 +34,16 @@ class SnapshotResult:
     balance_sum: int | None = None              # sum of snapshot-time balances
     in_transit_total: int | None = None          # tokens in-flight at snapshot time
     message_count: int | None = None            # control messages used for this snapshot
+    control_bytes: int | None = None
+    # Extended evaluation metrics
+    drain_ms: float | None = None
+    finalize_ms: float | None = None
+    validation_ms: float | None = None
+    commit_ms: float | None = None
+    recovery_ms: float | None = None
+    write_log_entries: int | None = None
+    write_log_bytes: int | None = None
+    dependency_tags_checked: int | None = None
 
 
 class CoordinatorProtocol(Protocol):
@@ -140,4 +150,12 @@ class CoordinatorProtocol(Protocol):
 
     def resume_workload(self) -> None:
         """Re-enable cross-node transfers after drain."""
+        ...
+
+    def reset_message_counter(self) -> int:
+        """Reset and return counted control messages for current snapshot."""
+        ...
+
+    def current_message_bytes(self) -> int:
+        """Return counted control/log bytes for current snapshot."""
         ...

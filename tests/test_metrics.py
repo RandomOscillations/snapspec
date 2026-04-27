@@ -93,6 +93,36 @@ class TestComputeSummary:
         assert s["avg_delta_blocks_at_discard"] == pytest.approx(16.0)
         assert s["max_delta_blocks_at_discard"] == 30
 
+    def test_extended_snapshot_metrics(self):
+        mc = _make_collector()
+        mc.on_snapshot_complete(
+            1, 100,
+            SnapshotResult(
+                success=True,
+                drain_ms=10.0,
+                finalize_ms=20.0,
+                validation_ms=5.0,
+                commit_ms=7.0,
+                recovery_ms=9.0,
+                write_log_entries=4,
+                write_log_bytes=200,
+                dependency_tags_checked=2,
+                control_bytes=1000,
+                message_count=12,
+            ),
+            duration_ms=50.0,
+        )
+        s = mc.compute_summary()
+        assert s["avg_drain_ms"] == pytest.approx(10.0)
+        assert s["avg_finalize_ms"] == pytest.approx(20.0)
+        assert s["avg_validation_ms"] == pytest.approx(5.0)
+        assert s["avg_commit_ms"] == pytest.approx(7.0)
+        assert s["avg_recovery_ms"] == pytest.approx(9.0)
+        assert s["avg_write_log_entries"] == pytest.approx(4.0)
+        assert s["avg_write_log_bytes"] == pytest.approx(200.0)
+        assert s["avg_dependency_tags_checked"] == pytest.approx(2.0)
+        assert s["avg_control_bytes_per_snapshot"] == pytest.approx(1000.0)
+
 
 class TestCSVExport:
     def test_csv_columns(self):
