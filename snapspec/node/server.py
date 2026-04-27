@@ -288,16 +288,21 @@ class StorageNode:
         if self._server:
             self._server.close()
             await self._server.wait_closed()
-        async with self._state_lock:
-            await self._cleanup_for_shutdown_locked(reason="local_stop")
+
         waiters = []
         for w in list(self._connections):
             if not w.is_closing():
                 w.close()
-                waiters.append(w.wait_closed())
+                waiters.append(asyncio.create_task(w.wait_closed()))
         if waiters:
-            await asyncio.gather(*waiters, return_exceptions=True)
+            _, pending = await asyncio.wait(waiters, timeout=2.0)
+            for task in pending:
+                task.cancel()
         self._connections.clear()
+
+        async with self._state_lock:
+            await self._cleanup_for_shutdown_locked(reason="local_stop")
+
         log_event(
             logger,
             component=self._component,
@@ -467,6 +472,8 @@ class StorageNode:
                 msg = await read_message(reader)
                 if msg is None:
                     break  # connection closed
+                if self._stopping:
+                    break
 
                 # Merge HLC on every incoming message
                 remote_ts = msg.get("logical_timestamp", 0)

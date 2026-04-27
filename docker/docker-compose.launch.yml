@@ -1,0 +1,84 @@
+services:
+  node1:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: node1
+    command:
+      - python
+      - launch.py
+      - --id
+      - "1"
+      - --config
+      - docker/cluster_launch.yaml
+      - --node-only
+    volumes:
+      - ./launch_state/node1/archives:/tmp/snapspec_archives
+      - ./launch_state/node1/data:/tmp/snapspec_data
+      - ./logs:/var/snapspec/logs
+    environment:
+      SNAPSPEC_LOG_DIR: /var/snapspec/logs
+      SNAPSPEC_LOG_PATH: /var/snapspec/logs/launch-node1.log
+    networks:
+      snaplaunch:
+        aliases:
+          - node1
+
+  node2:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: node2
+    command:
+      - python
+      - launch.py
+      - --id
+      - "2"
+      - --config
+      - docker/cluster_launch.yaml
+      - --node-only
+    volumes:
+      - ./launch_state/node2/archives:/tmp/snapspec_archives
+      - ./launch_state/node2/data:/tmp/snapspec_data
+      - ./logs:/var/snapspec/logs
+    environment:
+      SNAPSPEC_LOG_DIR: /var/snapspec/logs
+      SNAPSPEC_LOG_PATH: /var/snapspec/logs/launch-node2.log
+    networks:
+      snaplaunch:
+        aliases:
+          - node2
+
+  node0:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: node0
+    command:
+      - python
+      - launch.py
+      - --id
+      - "0"
+      - --config
+      - docker/cluster_launch.yaml
+      - --duration
+      - ${SNAPSPEC_DURATION:-6}
+    depends_on:
+      - node1
+      - node2
+    volumes:
+      - ./launch_state/node0/archives:/tmp/snapspec_archives
+      - ./launch_state/node0/data:/tmp/snapspec_data
+      - ../results:/app/results
+      - ./logs:/var/snapspec/logs
+    environment:
+      SNAPSPEC_LOG_DIR: /var/snapspec/logs
+      SNAPSPEC_LOG_PATH: /var/snapspec/logs/launch-node0.log
+    networks:
+      snaplaunch:
+        aliases:
+          - node0
+
+networks:
+  snaplaunch:
+    driver: bridge

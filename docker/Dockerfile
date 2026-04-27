@@ -22,6 +22,7 @@ COPY snapspec/ snapspec/
 COPY experiments/ experiments/
 COPY demo_remote/ demo_remote/
 COPY docker/ docker/
+COPY launch.py ./
 
 RUN pip install --no-cache-dir pyyaml pytest pytest-asyncio aiomysql
 RUN cmake -B build -S . -DSNAPSPEC_BUILD_TESTS=OFF && \

@@ -626,8 +626,14 @@ async def run_node(config: dict, node_id: int, node_only: bool = False,
             print(f"  {p}")
         print()
 
-        await workload.stop()
-        await node.stop()
+        try:
+            await asyncio.wait_for(workload.stop(), timeout=5.0)
+        except asyncio.TimeoutError:
+            print("  Warning: local workload shutdown timed out.")
+        try:
+            await asyncio.wait_for(node.stop(), timeout=5.0)
+        except asyncio.TimeoutError:
+            print("  Warning: local node shutdown timed out.")
     else:
         # Non-coordinator node — just wait
         print("Waiting for coordinator to drive experiments...")

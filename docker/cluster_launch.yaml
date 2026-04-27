@@ -1,0 +1,27 @@
+nodes:
+  - id: 0
+    host: "node0"
+    port: 9000
+  - id: 1
+    host: "node1"
+    port: 9000
+  - id: 2
+    host: "node2"
+    port: 9000
+
+coordinator_node: 0
+
+workload:
+  write_rate: 60
+  cross_node_ratio: 0.2
+  total_tokens: 100000
+  block_size: 64
+  total_blocks: 32
+
+experiment:
+  duration_s: 6
+  snapshot_interval_s: 1.5
+  strategies: "all"
+  output_dir: "results/docker_launch"
+
+block_store: "row"
