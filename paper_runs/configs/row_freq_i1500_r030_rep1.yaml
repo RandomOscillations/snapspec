@@ -1,0 +1,25 @@
+nodes:
+- id: 0
+  host: 10.136.33.75
+  port: 9000
+- id: 1
+  host: 10.136.153.26
+  port: 9000
+- id: 2
+  host: 10.136.32.251
+  port: 9000
+coordinator_node: 0
+workload:
+  write_rate: 200
+  cross_node_ratio: 0.3
+  total_tokens: 100000
+  block_size: 4096
+  total_blocks: 256
+experiment:
+  duration_s: 30
+  snapshot_interval_s: 1.5
+  strategies: all
+  output_dir: results/paper/row_freq_i1500_r030/rep1
+  baseline_duration_s: 30
+  collect_baseline: true
+block_store: row
