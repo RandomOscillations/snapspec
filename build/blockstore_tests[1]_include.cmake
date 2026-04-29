@@ -1,5 +1,0 @@
-if(EXISTS "/Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/blockstore_tests[1]_tests.cmake")
-  include("/Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/blockstore_tests[1]_tests.cmake")
-else()
-  add_test(blockstore_tests_NOT_BUILT blockstore_tests_NOT_BUILT)
-endif()

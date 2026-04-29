@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/Users/adithyasrinivasan/Projects/snapspec-base/snapspec/build/_deps/googletest-subbuild/cmake_install.cmake"
-	],
-	"Parallel" : false
-}
