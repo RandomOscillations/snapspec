@@ -1,0 +1,29 @@
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local tooling/cache
+.cache/
+.claude/
+
+# Build artifacts
+build/
+
+# Runtime state and logs
+*.log
+*.db
+*.sqlite
+docker/logs/
+docker/launch_state/
+docker/state/
+
+# Generated experiment output. Keep the curated paper dataset.
+results/*
+!results/paper/
+!results/paper/**
+
+# Legacy generated plots; paper plots live under results/paper/plots.
+plots/
