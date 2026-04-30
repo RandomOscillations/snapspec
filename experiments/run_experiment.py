@@ -320,6 +320,7 @@ async def run_single(config: dict, rep: int, output_dir: str) -> str:
             min_snapshot_nodes=config.get("min_snapshot_nodes"),
             shutdown_timeout_s=float(config.get("shutdown_timeout_s", 30.0)),
             shutdown_nodes_on_stop=bool(config.get("shutdown_nodes_on_stop", False)),
+            snapshot_transfer_policy=str(config.get("snapshot_transfer_policy", "drain")),
             metadata_registry=build_metadata_registry(config, rep, output_dir),
         )
         coordinator.expected_total = total_tokens

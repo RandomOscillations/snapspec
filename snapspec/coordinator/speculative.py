@@ -81,7 +81,8 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
 
         # Step 0: quiesce cross-node transfer pairs only. Local writes continue.
         drain_start = time.monotonic()
-        await coordinator.drain_workload()
+        if coordinator.should_drain_workload():
+            await coordinator.drain_workload()
         drain_ms = (time.monotonic() - drain_start) * 1000
 
         # Step 1: Snap all nodes — no pause, no prepare

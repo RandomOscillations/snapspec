@@ -20,6 +20,7 @@ class MockCoordinator:
     speculative_max_retries: int = 5
     validation_timeout_s: float = 1.0
     validation_grace_s: float = 0.0
+    snapshot_transfer_policy: str = "drain"
     delta_size_threshold_frac: float = 0.10
     total_blocks_per_node: int = 4096
     expected_total: int = 0
@@ -88,10 +89,13 @@ class MockCoordinator:
         return self.expected_total
 
     async def drain_workload(self) -> None:
-        pass
+        self._call_log.append(("DRAIN_WORKLOAD", self._clock))
 
     def resume_workload(self) -> None:
         pass
+
+    def should_drain_workload(self) -> bool:
+        return self.snapshot_transfer_policy == "drain"
 
     def reset_message_counter(self) -> int:
         return 0
@@ -280,6 +284,16 @@ class TestSpeculative:
         assert not result.success
         assert coord.was_called("ABORT")
         assert not coord.was_called("COMMIT")
+
+    @pytest.mark.asyncio
+    async def test_speculative_policy_can_skip_transfer_drain(self, coord):
+        from snapspec.coordinator.speculative import execute
+        coord.snapshot_transfer_policy = "speculate"
+
+        result = await execute(coord, ts=1)
+
+        assert result.success
+        assert not coord.was_called("DRAIN_WORKLOAD")
 
     @pytest.mark.asyncio
     async def test_delta_blocks_tracked(self, coord):

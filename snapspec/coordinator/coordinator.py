@@ -63,6 +63,7 @@ class Coordinator:
         shutdown_nodes_on_stop: bool = False,
         delta_size_threshold_frac: float = 0.1,
         total_blocks_per_node: int = 4096,
+        snapshot_transfer_policy: str = "drain",
         on_snapshot_complete: Callable | None = None,
         metadata_registry: SnapshotMetadataRegistry | None = None,
     ):
@@ -84,6 +85,7 @@ class Coordinator:
         self.shutdown_nodes_on_stop = shutdown_nodes_on_stop
         self.delta_size_threshold_frac = delta_size_threshold_frac
         self.total_blocks_per_node = total_blocks_per_node
+        self.snapshot_transfer_policy = snapshot_transfer_policy
 
         self._on_snapshot_complete = on_snapshot_complete
         self._metadata_registry = metadata_registry
@@ -521,6 +523,10 @@ class Coordinator:
         if healthy:
             ts = self.tick()
             await self.send_all(MessageType.DRAIN_WORKLOAD.value, ts, node_ids=healthy)
+
+    def should_drain_workload(self) -> bool:
+        """Return whether the active snapshot policy requires transfer drain."""
+        return self.snapshot_transfer_policy == "drain"
 
     def resume_workload(self) -> None:
         """Re-enable cross-node transfers on healthy nodes' workloads."""

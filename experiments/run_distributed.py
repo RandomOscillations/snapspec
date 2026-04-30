@@ -219,6 +219,7 @@ async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> tu
         min_snapshot_nodes=cfg.get("min_snapshot_nodes"),
         shutdown_timeout_s=float(cfg.get("shutdown_timeout_s", 30.0)),
         shutdown_nodes_on_stop=bool(cfg.get("shutdown_nodes_on_stop", False)),
+        snapshot_transfer_policy=str(cfg.get("snapshot_transfer_policy", "drain")),
         metadata_registry=build_metadata_registry(cfg, strategy_name),
     )
     await coordinator.start()
@@ -441,4 +442,3 @@ if __name__ == "__main__":
     if log_path:
         logger.info("Coordinator logs are also being written to %s", log_path)
     asyncio.run(main())
-

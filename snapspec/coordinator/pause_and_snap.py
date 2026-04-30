@@ -63,7 +63,8 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     # Without this, a cross-node transfer can be split by PAUSE: the debit
     # is ACK'd but the credit is blocked by PAUSED_ERR — conservation violation.
     drain_start = time.monotonic()
-    await coordinator.drain_workload()
+    if coordinator.should_drain_workload():
+        await coordinator.drain_workload()
     drain_ms = (time.monotonic() - drain_start) * 1000
 
     # Phase 1: Pause all writes on all nodes

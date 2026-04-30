@@ -55,6 +55,7 @@ class CoordinatorProtocol(Protocol):
     validation_grace_s: float
     delta_size_threshold_frac: float
     total_blocks_per_node: int
+    snapshot_transfer_policy: str
 
     # --- Accuracy validation ---
     expected_total: int                        # 0 means conservation check disabled
@@ -146,6 +147,10 @@ class CoordinatorProtocol(Protocol):
 
     async def drain_workload(self) -> None:
         """Drain in-flight workload transfers before pausing."""
+        ...
+
+    def should_drain_workload(self) -> bool:
+        """Return whether this snapshot attempt should drain transfer pairs."""
         ...
 
     def resume_workload(self) -> None:

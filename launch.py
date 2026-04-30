@@ -385,6 +385,7 @@ async def run_strategy(
                 float(exp_cfg.get("validation_delay_ms", 0.0)) / 1000.0,
             )
         ),
+        snapshot_transfer_policy=str(exp_cfg.get("snapshot_transfer_policy", "drain")),
         health_check_interval_s=1.0,
         health_check_timeout_s=0.5,
         health_unhealthy_after_s=3.0,
