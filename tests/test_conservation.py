@@ -50,6 +50,28 @@ class TestConservation:
         assert result.in_transit_total == 1000
         assert result.balance_sum == 999_000
 
+    def test_in_transit_amount_can_come_from_write_log_entry(self):
+        """Durable node write metadata is the authoritative amount source."""
+        balances = [499_000, 500_000]
+        logs = [
+            [],
+            [{**_entry(tag=42, role="EFFECT"), "amount": 1000}],
+        ]
+        result = validate_conservation(balances, logs, {}, TOTAL)
+        assert result.valid
+        assert result.in_transit_total == 1000
+
+    def test_in_transit_amount_can_come_from_balance_delta(self):
+        """Older log payloads can still expose amount through signed balance_delta."""
+        balances = [499_000, 500_000]
+        logs = [
+            [],
+            [{**_entry(tag=42, role="EFFECT"), "balance_delta": 1000}],
+        ]
+        result = validate_conservation(balances, logs, {}, TOTAL)
+        assert result.valid
+        assert result.in_transit_total == 1000
+
     def test_both_applied_no_in_transit(self):
         """Both halves pre-snap (in snapshot). No in-transit."""
         balances = [499_000, 501_000]  # transfer already complete

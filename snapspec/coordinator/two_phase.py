@@ -122,23 +122,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
 
     # Phase 2: Commit or Abort
     if causal_ok:
-        commit_start = time.monotonic()
-        commit_responses = await coordinator.send_all(
-            _COMMIT, ts, node_ids=responding_node_ids
-        )
-        commit_ms = (time.monotonic() - commit_start) * 1000
-        if not all(r is not None and r.get("type") == "ACK" for r in commit_responses):
-            logger.warning("Two-phase: some nodes failed COMMIT at ts=%d", ts)
-            await coordinator.send_all(_ABORT, ts, node_ids=participant_node_ids)
-            coordinator.resume_workload()
-            return SnapshotResult(
-                success=False, causal_consistent=True,
-                conservation_holds=False,
-                participant_node_ids=responding_node_ids,
-                failure_reason="commit_failed",
-            )
-
-        # Conservation check — only valid when all nodes participate
+        # Conservation is a pre-commit correctness gate, not just a metric.
         conservation_ok: bool | None = None
         balance_sum: int | None = None
         in_transit_total: int | None = None
@@ -168,7 +152,34 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                     cons.in_transit_tags[:10],
                     cons.post_role_samples,
                 )
+                await coordinator.send_all(_ABORT, ts, node_ids=participant_node_ids)
+                coordinator.resume_workload()
+                return SnapshotResult(
+                    success=False,
+                    causal_consistent=True,
+                    conservation_holds=False,
+                    participant_node_ids=responding_node_ids,
+                    failure_reason="conservation_violation",
+                    balance_sum=balance_sum,
+                    in_transit_total=in_transit_total,
+                )
             validation_ms = (time.monotonic() - validation_start) * 1000
+
+        commit_start = time.monotonic()
+        commit_responses = await coordinator.send_all(
+            _COMMIT, ts, node_ids=responding_node_ids
+        )
+        commit_ms = (time.monotonic() - commit_start) * 1000
+        if not all(r is not None and r.get("type") == "ACK" for r in commit_responses):
+            logger.warning("Two-phase: some nodes failed COMMIT at ts=%d", ts)
+            await coordinator.send_all(_ABORT, ts, node_ids=participant_node_ids)
+            coordinator.resume_workload()
+            return SnapshotResult(
+                success=False, causal_consistent=True,
+                conservation_holds=False,
+                participant_node_ids=responding_node_ids,
+                failure_reason="commit_failed",
+            )
 
         # Verify restore — proves archive can restore exact snapshot state
         recovery_verified = None

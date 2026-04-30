@@ -24,6 +24,7 @@ class MockCoordinator:
     total_blocks_per_node: int = 4096
     expected_total: int = 0
     transfer_amounts: dict = field(default_factory=dict)
+    pending_transfer_records: dict = field(default_factory=dict)
     _clock: int = 0
     _responses: dict[str, list[dict]] = field(default_factory=dict)
     _write_logs: list[list[dict]] = field(default_factory=list)
@@ -193,6 +194,17 @@ class TestTwoPhase:
         assert not result.success
         assert coord.was_called("ABORT")
 
+    @pytest.mark.asyncio
+    async def test_conservation_failure_aborts_before_commit(self, coord):
+        from snapspec.coordinator.two_phase import execute
+        coord.expected_total = 1000
+        coord._snapshot_balances = [1200, 0]
+        result = await execute(coord, ts=1)
+        assert not result.success
+        assert result.failure_reason == "conservation_violation"
+        assert coord.was_called("ABORT")
+        assert not coord.was_called("COMMIT")
+
 
 # ---- Speculative Tests ----
 
@@ -255,6 +267,19 @@ class TestSpeculative:
         result = await execute(coord, ts=1)
         assert result.success  # two-phase fallback succeeds
         assert result.retries == 3  # max_retries + 1 indicates fallback
+
+    @pytest.mark.asyncio
+    async def test_conservation_failure_retries_instead_of_commit(self, coord):
+        from snapspec.coordinator.speculative import execute
+        coord.speculative_max_retries = 0
+        coord.expected_total = 1000
+        coord._snapshot_balances = [1200, 0]
+
+        result = await execute(coord, ts=1)
+
+        assert not result.success
+        assert coord.was_called("ABORT")
+        assert not coord.was_called("COMMIT")
 
     @pytest.mark.asyncio
     async def test_delta_blocks_tracked(self, coord):

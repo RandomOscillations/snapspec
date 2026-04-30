@@ -55,6 +55,7 @@ class PendingTransfer:
     debit_ts: int = 0
     attempts: int = 0
     next_retry_at: float = 0.0
+    state: str = "INTENT_CREATED"
 
 
 class NodeWorkload:
@@ -136,6 +137,7 @@ class NodeWorkload:
                 "dest_node_id": pending.dest,
                 "attempts": pending.attempts,
                 "debit_ts": pending.debit_ts,
+                "transfer_state": pending.state,
             }
             for tag, pending in self._pending_effects.items()
         }
@@ -405,6 +407,7 @@ class NodeWorkload:
                 data=data,
                 amount=amount,
                 debit_ts=0,
+                state="INTENT_CREATED",
             )
             self._pending_effects[dep_tag] = pending
             await self._persist_pending_effect(pending)
@@ -429,6 +432,7 @@ class NodeWorkload:
                 raise
 
             self._local_balance -= amount
+            pending.state = "DEBIT_APPLIED"
             await self._persist_pending_effect(pending)
 
             credit_writes = await self._flush_pending_effect(dep_tag)
@@ -462,6 +466,8 @@ class NodeWorkload:
 
         try:
             credit_ts = self.tick()
+            pending.state = "CREDIT_SENT"
+            await self._persist_pending_effect(pending)
             await self._send_write_with_retry(
                 conn,
                 pending.block_id,
@@ -500,6 +506,7 @@ class NodeWorkload:
             return 0
 
         await self._mark_pending_effect_applied(pending)
+        pending.state = "ACK_OBSERVED"
         self._pending_effects.pop(dep_tag, None)
         return 1
 
@@ -618,6 +625,7 @@ class NodeWorkload:
                 amount=row.amount,
                 debit_ts=row.debit_ts,
                 attempts=row.attempts,
+                state="DEBIT_APPLIED" if row.debit_ts > 0 else "INTENT_CREATED",
             )
             self._pending_effects[pending.dep_tag] = pending
             self._transfer_amounts[pending.dep_tag] = pending.amount

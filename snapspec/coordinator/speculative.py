@@ -142,28 +142,8 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
         validation_ms = (time.monotonic() - validation_start) * 1000
 
         if result == ValidationResult.CONSISTENT:
-            # Step 4a: Commit
-            commit_start = time.monotonic()
-            commit_responses = await coordinator.send_all(
-                _COMMIT, attempt_ts, node_ids=responding_node_ids
-            )
-            commit_ms = (time.monotonic() - commit_start) * 1000
-            if not all(r is not None and r.get("type") == "ACK"
-                       for r in commit_responses):
-                logger.warning(
-                    "Speculative: some nodes failed COMMIT at ts=%d", attempt_ts
-                )
-                delta_blocks_at_discard.extend(
-                    _extract_delta_blocks(commit_responses))
-                await coordinator.send_all(
-                    _ABORT, attempt_ts, node_ids=participant_node_ids
-                )
-                coordinator.resume_workload()
-                if attempt < max_retries:
-                    await asyncio.sleep(_BACKOFF_BASE_S * (attempt + 1))
-                continue
-
-            # Conservation check — only valid when all nodes participate
+            # Conservation is a pre-commit correctness gate. A causally valid
+            # cut can still be unusable if accounting metadata is missing.
             conservation_ok: bool | None = None
             balance_sum: int | None = None
             in_transit_total: int | None = None
@@ -194,7 +174,36 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                         cons.in_transit_tags[:10],
                         cons.post_role_samples,
                     )
+                    abort_responses = await coordinator.send_all(
+                        _ABORT, attempt_ts, node_ids=participant_node_ids
+                    )
+                    delta_blocks_at_discard.extend(_extract_delta_blocks(abort_responses))
+                    coordinator.resume_workload()
+                    if attempt < max_retries:
+                        await asyncio.sleep(_BACKOFF_BASE_S * (attempt + 1))
+                    continue
                 validation_ms = (time.monotonic() - validation_start) * 1000
+
+            # Step 4a: Commit
+            commit_start = time.monotonic()
+            commit_responses = await coordinator.send_all(
+                _COMMIT, attempt_ts, node_ids=responding_node_ids
+            )
+            commit_ms = (time.monotonic() - commit_start) * 1000
+            if not all(r is not None and r.get("type") == "ACK"
+                       for r in commit_responses):
+                logger.warning(
+                    "Speculative: some nodes failed COMMIT at ts=%d", attempt_ts
+                )
+                delta_blocks_at_discard.extend(
+                    _extract_delta_blocks(commit_responses))
+                await coordinator.send_all(
+                    _ABORT, attempt_ts, node_ids=participant_node_ids
+                )
+                coordinator.resume_workload()
+                if attempt < max_retries:
+                    await asyncio.sleep(_BACKOFF_BASE_S * (attempt + 1))
+                continue
 
             # Verify restore — proves archive can restore exact snapshot state
             recovery_verified = None

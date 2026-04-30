@@ -42,6 +42,16 @@ class NodeState(str, Enum):
     SNAPPED = "SNAPPED"
 
 
+class TransferState(str, Enum):
+    INTENT_CREATED = "INTENT_CREATED"
+    DEBIT_APPLIED = "DEBIT_APPLIED"
+    CREDIT_SENT = "CREDIT_SENT"
+    CREDIT_APPLIED = "CREDIT_APPLIED"
+    ACK_OBSERVED = "ACK_OBSERVED"
+    ROLLED_BACK = "ROLLED_BACK"
+    DISCARDED = "DISCARDED"
+
+
 class MockBlockStore:
     """Minimal in-memory block store for testing without C++ bindings.
 
@@ -171,6 +181,15 @@ def _role_to_str(role) -> str:
     return role.name
 
 
+def _transfer_operation_key(
+    dep_tag: int,
+    role: str,
+    node_id: int,
+    partner_node_id: int,
+) -> str:
+    return f"{dep_tag}:{role}:{node_id}:{partner_node_id}"
+
+
 class StorageNode:
     """Storage node server.
 
@@ -231,6 +250,7 @@ class StorageNode:
         # writes carry stable ids so reconnect/retry cannot double-apply a
         # balance delta if the original ACK was lost.
         self._applied_write_acks: dict[str, dict[str, Any]] = {}
+        self._transfer_operations: dict[str, dict[str, Any]] = {}
 
         # Snapshot ground truth: maps snapshot_ts -> {block_id: bytes}
         # Captured at snapshot creation for restore verification
@@ -353,6 +373,20 @@ class StorageNode:
             str(path): int(balance)
             for path, balance in archive_balances.items()
         }
+        applied = state.get("applied_write_acks", {})
+        if isinstance(applied, dict):
+            self._applied_write_acks = {
+                str(key): dict(value)
+                for key, value in applied.items()
+                if isinstance(value, dict)
+            }
+        operations = state.get("transfer_operations", {})
+        if isinstance(operations, dict):
+            self._transfer_operations = {
+                str(key): dict(value)
+                for key, value in operations.items()
+                if isinstance(value, dict)
+            }
 
         # Restore block data from latest archive if available
         latest_archive = state.get("latest_archive_path")
@@ -429,6 +463,8 @@ class StorageNode:
             "archive_balances": self._archive_balances,
             "latest_archive_path": latest_archive,
             "latest_snapshot_ts": latest_ts,
+            "applied_write_acks": self._applied_write_acks,
+            "transfer_operations": self._transfer_operations,
         }
         tmp_path = f"{self._state_path}.tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
@@ -575,21 +611,90 @@ class StorageNode:
 
     def _write_log_payload_locked(self) -> tuple[list[dict], int, dict, dict]:
         raw_log = self.block_store.get_write_log()
-        entries = [
-            {
+        entries = []
+        for e in raw_log:
+            role = _role_to_str(e.role)
+            entry = {
                 "block_id": e.block_id,
                 "timestamp": e.timestamp,
                 "dependency_tag": e.dependency_tag,
-                "role": _role_to_str(e.role),
+                "role": role,
                 "partner_node_id": e.partner_node_id,
             }
-            for e in raw_log
-        ]
+            op = self._transfer_operations.get(
+                _transfer_operation_key(
+                    int(e.dependency_tag or 0),
+                    role,
+                    self.node_id,
+                    int(e.partner_node_id),
+                )
+            )
+            if op is not None:
+                entry.update(
+                    {
+                        "write_id": op.get("write_id"),
+                        "amount": op.get("amount", 0),
+                        "balance_delta": op.get("balance_delta", 0),
+                        "transfer_state": op.get("transfer_state"),
+                        "source_node_id": op.get("source_node_id"),
+                        "dest_node_id": op.get("dest_node_id"),
+                        "workload_epoch": op.get("workload_epoch"),
+                    }
+                )
+            entries.append(entry)
         balance = self._snapshot_balance if self._snapshot_balance is not None else self._balance
         pending_records = {}
         if self._local_workload is not None:
             pending_records = self._local_workload.pending_transfer_records
-        return entries, balance, self._local_transfer_amounts, pending_records
+        transfer_amounts = dict(self._local_transfer_amounts)
+        for op in self._transfer_operations.values():
+            tag = int(op.get("dependency_tag", 0) or 0)
+            amount = int(op.get("amount", 0) or 0)
+            if tag > 0 and amount > 0:
+                transfer_amounts[tag] = amount
+        return entries, balance, transfer_amounts, pending_records
+
+    def _record_transfer_operation_locked(
+        self,
+        *,
+        write_key: str | None,
+        dep_tag: int,
+        role: str,
+        partner: int,
+        block_id: int,
+        amount: int,
+        balance_delta: int,
+        write_ts: int,
+        workload_epoch: int,
+    ) -> None:
+        if dep_tag <= 0 or role not in ("CAUSE", "EFFECT"):
+            return
+
+        if role == "CAUSE":
+            state = TransferState.DEBIT_APPLIED.value
+            source_node_id = self.node_id
+            dest_node_id = partner
+        else:
+            state = TransferState.CREDIT_APPLIED.value
+            source_node_id = partner
+            dest_node_id = self.node_id
+
+        op_key = _transfer_operation_key(dep_tag, role, self.node_id, partner)
+        self._transfer_operations[op_key] = {
+            "write_id": write_key,
+            "dependency_tag": dep_tag,
+            "role": role,
+            "transfer_state": state,
+            "source_node_id": source_node_id,
+            "dest_node_id": dest_node_id,
+            "partner_node_id": partner,
+            "block_id": block_id,
+            "amount": amount,
+            "balance_delta": balance_delta,
+            "write_timestamp": write_ts,
+            "workload_epoch": workload_epoch,
+            "snapshot_ts": self.snapshot_ts if self.block_store.is_snapshot_active() else 0,
+        }
 
     def _capture_ground_truth(self, snapshot_ts: int):
         """Read all blocks right after create_snapshot() to record ground truth.
@@ -621,8 +726,11 @@ class StorageNode:
             block_id = msg["block_id"]
             data = base64.b64decode(msg["data"])
             dep_tag = msg.get("dep_tag", 0)
+            dep_tag = int(dep_tag or 0)
             role_str = msg.get("role", "NONE")
             partner = msg.get("partner", -1)
+            partner = int(partner)
+            balance_delta = int(msg.get("balance_delta", 0))
             workload_epoch = int(msg.get("workload_epoch", self._workload_epoch))
             if workload_epoch < self._workload_epoch:
                 await self._send(
@@ -656,8 +764,21 @@ class StorageNode:
 
             # Update token balance
             if "balance_delta" in msg:
-                self._balance += msg["balance_delta"]
+                self._balance += balance_delta
             self._record_write_ack(write_key, block_id, node_ts)
+            self._record_transfer_operation_locked(
+                write_key=write_key,
+                dep_tag=dep_tag,
+                role=role_str,
+                partner=partner,
+                block_id=block_id,
+                amount=abs(balance_delta),
+                balance_delta=balance_delta,
+                write_ts=node_ts,
+                workload_epoch=workload_epoch,
+            )
+            if dep_tag > 0 or balance_delta != 0:
+                self._persist_runtime_state()
 
         await self._send(
             writer,
@@ -993,6 +1114,7 @@ class StorageNode:
             self._archive_balances = {}
             self._snapshot_ground_truth = {}
             self._applied_write_acks = {}
+            self._transfer_operations = {}
             self._workload_epoch += 1
             self._persist_runtime_state()
 
@@ -1160,6 +1282,7 @@ class StorageNode:
                 self.delta_blocks_at_discard = []
                 self._snapshot_ground_truth = {}
                 self._applied_write_acks = {}
+                self._transfer_operations = {}
                 self._persist_runtime_state()
                 restored = True
 
@@ -1268,6 +1391,7 @@ class StorageNode:
             self.delta_blocks_at_discard = []
             self._snapshot_ground_truth = {}
             self._applied_write_acks = {}
+            self._transfer_operations = {}
             self._restore_prepared_snapshot_ts = None
             self._restore_prepared_archive_path = None
             self._persist_runtime_state()

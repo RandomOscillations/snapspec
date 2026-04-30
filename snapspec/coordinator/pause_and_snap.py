@@ -142,6 +142,18 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                 cons.in_transit_tags[:10],
                 cons.post_role_samples,
             )
+            coordinator.resume_workload()
+            await coordinator.send_all("ABORT", ts, node_ids=participant_node_ids)
+            await coordinator.send_all(_RESUME, ts, node_ids=participant_node_ids)
+            return SnapshotResult(
+                success=False,
+                participant_node_ids=responding_node_ids,
+                failure_reason="conservation_violation",
+                causal_consistent=True,
+                conservation_holds=False,
+                balance_sum=balance_sum,
+                in_transit_total=in_transit_total,
+            )
     validation_ms = (time.monotonic() - validation_start) * 1000
 
     # Phase 4: Commit

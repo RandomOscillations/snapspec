@@ -467,11 +467,9 @@ class TestRecoveryIntegration:
             await coordinator.start()
 
             result = await coordinator.trigger_snapshot()
-            assert result.success  # snapshot still commits
-            # With the new restore verification, restore_verified checks block-level
-            # ground truth match (which should pass) but conservation may fail
-            # because expected_total is wrong
-            assert result.recovery_conservation_holds is False  # balance mismatch
+            assert not result.success
+            assert result.failure_reason == "conservation_violation"
+            assert result.conservation_holds is False
 
             await coordinator.stop()
         finally:

@@ -60,6 +60,7 @@ def validate_conservation(
     #
     # Build tag -> set of roles that are POST-snapshot (in the logs)
     tag_to_post_roles: dict[int, set[str]] = defaultdict(set)
+    tag_to_amount: dict[int, int] = {}
     skipped_tags: set[int] = set()
     for node_log in all_node_logs:
         for entry in node_log:
@@ -77,6 +78,9 @@ def validate_conservation(
                     skipped_tags.add(tag)
                     continue
             tag_to_post_roles[tag].add(role)
+            amount = _entry_amount(entry)
+            if amount > 0:
+                tag_to_amount[tag] = amount
 
     in_transit_total = 0
     in_transit_tags: list[int] = []
@@ -87,7 +91,7 @@ def validate_conservation(
         # In-transit: debit applied (CAUSE pre-snap, not in logs) but credit pending (EFFECT post-snap, in logs)
         # This means EFFECT is in post_roles but CAUSE is not
         if "EFFECT" in post_roles and "CAUSE" not in post_roles:
-            amount = transfer_amounts.get(tag, 0)
+            amount = tag_to_amount.get(tag, transfer_amounts.get(tag, 0))
             in_transit_total += amount
             in_transit_tags.append(tag)
             counted_tags.add(tag)
@@ -121,7 +125,7 @@ def validate_conservation(
         ):
             continue
 
-        amount = int(pending.get("amount", transfer_amounts.get(tag, 0)))
+        amount = int(pending.get("amount", tag_to_amount.get(tag, transfer_amounts.get(tag, 0))))
         if amount <= 0:
             continue
         if amount > pending_deficit:
@@ -132,7 +136,7 @@ def validate_conservation(
         pending_deficit -= amount
 
     post_role_samples = [
-        f"tag={tag}:roles={','.join(sorted(post_roles))}:amount={transfer_amounts.get(tag, 0)}"
+        f"tag={tag}:roles={','.join(sorted(post_roles))}:amount={tag_to_amount.get(tag, transfer_amounts.get(tag, 0))}"
         for tag, post_roles in sorted(tag_to_post_roles.items())[:10]
     ]
     if pending_transfers:
@@ -169,3 +173,27 @@ def validate_conservation(
             in_transit_tags=in_transit_tags,
             post_role_samples=post_role_samples,
         )
+
+
+def _entry_amount(entry: dict) -> int:
+    """Return the positive transfer amount carried by a write-log entry."""
+    for key in ("amount", "transfer_amount"):
+        value = entry.get(key)
+        if value is None:
+            continue
+        try:
+            amount = int(value)
+        except (TypeError, ValueError):
+            continue
+        if amount > 0:
+            return amount
+
+    # Balance deltas are signed; transfer amount is the absolute movement.
+    value = entry.get("balance_delta")
+    if value is not None:
+        try:
+            amount = abs(int(value))
+        except (TypeError, ValueError):
+            return 0
+        return amount
+    return 0
