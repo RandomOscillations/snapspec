@@ -344,11 +344,12 @@ async def run_single(config: dict, rep: int, output_dir: str) -> str:
                     total_tokens=total_tokens,
                     num_nodes=num_nodes,
                     block_size=config.get("block_size", 4096),
-                total_blocks=config.get("total_blocks", 256),
-                seed=config.get("seed"),
-                pending_outbox=build_pending_outbox(config, rep, output_dir),
-                outbox_run_id=outbox_run_id,
-            )
+                    total_blocks=config.get("total_blocks", 256),
+                    seed=config.get("seed"),
+                    effect_delay_s=config.get("effect_delay_s", 0.0),
+                    pending_outbox=build_pending_outbox(config, rep, output_dir),
+                    outbox_run_id=outbox_run_id,
+                )
                 workloads.append(wl)
             coordinator.transfer_amounts = {}
         else:

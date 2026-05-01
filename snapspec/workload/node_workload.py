@@ -74,6 +74,7 @@ class NodeWorkload:
         block_size: int = 4096,
         total_blocks: int = 256,
         seed: int | None = None,
+        effect_delay_s: float = 0.0,
         pending_outbox: PendingTransferOutbox | None = None,
         outbox_run_id: str = "node-local",
     ):
@@ -86,6 +87,7 @@ class NodeWorkload:
         self._num_nodes = num_nodes
         self._block_size = block_size
         self._total_blocks = total_blocks
+        self._effect_delay_s = max(0.0, float(effect_delay_s))
         self._pending_outbox = pending_outbox
         self._outbox_run_id = outbox_run_id
 
@@ -434,6 +436,9 @@ class NodeWorkload:
             self._local_balance -= amount
             pending.state = "DEBIT_APPLIED"
             await self._persist_pending_effect(pending)
+
+            if self._effect_delay_s > 0:
+                await asyncio.sleep(self._effect_delay_s)
 
             credit_writes = await self._flush_pending_effect(dep_tag)
             if credit_writes > 0:

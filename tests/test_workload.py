@@ -244,6 +244,35 @@ class TestCrossNodeTransfer:
             await wl.stop()
 
     @pytest.mark.asyncio
+    async def test_effect_delay_exposes_pending_credit_window(self, nodes):
+        wl = NodeWorkload(
+            node_id=0, local_port=nodes[0].actual_port,
+            remote_nodes=[{"node_id": 1, "host": "127.0.0.1", "port": nodes[1].actual_port}],
+            write_rate=1, cross_node_ratio=0.0,
+            initial_balance=10_000, total_tokens=30_000, num_nodes=NUM_NODES,
+            block_size=64, total_blocks=32, seed=7,
+            effect_delay_s=0.05,
+        )
+        await wl.start()
+        try:
+            transfer_task = asyncio.create_task(wl._do_cross_node_transfer())
+            await asyncio.sleep(0.02)
+
+            pending = wl.pending_transfer_records
+            assert len(pending) == 1
+            record = next(iter(pending.values()))
+            assert record["transfer_state"] == "DEBIT_APPLIED"
+            assert record["debit_ts"] > 0
+            assert nodes[1]._balance == 10_000
+
+            writes = await transfer_task
+            assert writes == 2
+            assert wl.pending_transfer_records == {}
+            assert nodes[1]._balance > 10_000
+        finally:
+            await wl.stop()
+
+    @pytest.mark.asyncio
     async def test_outbox_intent_without_debit_is_not_replayed(self, nodes, tmp_path):
         outbox = PendingTransferOutbox.for_sqlite(str(tmp_path / "outbox.db"))
         await outbox.upsert_pending(

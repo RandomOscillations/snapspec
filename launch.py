@@ -560,6 +560,15 @@ async def run_node(config: dict, node_id: int, node_only: bool = False,
     per_node = total_tokens // num_nodes
     block_size = wl_cfg.get("block_size", 4096)
     total_blocks = wl_cfg.get("total_blocks", 256)
+    effect_delay_s = float(
+        wl_cfg.get(
+            "effect_delay_s",
+            exp_cfg.get(
+                "effect_delay_s",
+                float(wl_cfg.get("effect_delay_ms", exp_cfg.get("effect_delay_ms", 0))) / 1000.0,
+            ),
+        )
+    )
 
     local_ip = get_local_ip()
     archive_dir = f"/tmp/snapspec_archives/node{node_id}"
@@ -653,6 +662,7 @@ async def run_node(config: dict, node_id: int, node_only: bool = False,
             num_nodes=num_nodes,
             block_size=block_size,
             total_blocks=total_blocks,
+            effect_delay_s=effect_delay_s,
             pending_outbox=outbox,
             outbox_run_id=outbox_run_id,
         )
