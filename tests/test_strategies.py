@@ -257,6 +257,7 @@ class TestSpeculative:
     async def test_exhausted_retries_falls_back(self, coord):
         from snapspec.coordinator.speculative import execute
         coord.speculative_max_retries = 2
+        coord.snapshot_transfer_policy = "speculate"
 
         call_count = [0]
 
@@ -271,6 +272,8 @@ class TestSpeculative:
         result = await execute(coord, ts=1)
         assert result.success  # two-phase fallback succeeds
         assert result.retries == 3  # max_retries + 1 indicates fallback
+        assert coord.call_count("DRAIN_WORKLOAD") == 1
+        assert coord.snapshot_transfer_policy == "speculate"
 
     @pytest.mark.asyncio
     async def test_conservation_failure_retries_instead_of_commit(self, coord):

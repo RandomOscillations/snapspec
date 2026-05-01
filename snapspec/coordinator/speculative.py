@@ -272,7 +272,12 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     from .two_phase import execute as two_phase_execute
 
     fallback_ts = coordinator.tick()
-    fallback_result = await two_phase_execute(coordinator, fallback_ts)
+    original_policy = getattr(coordinator, "snapshot_transfer_policy", "drain")
+    coordinator.snapshot_transfer_policy = "drain"
+    try:
+        fallback_result = await two_phase_execute(coordinator, fallback_ts)
+    finally:
+        coordinator.snapshot_transfer_policy = original_policy
 
     return SnapshotResult(
         success=fallback_result.success,

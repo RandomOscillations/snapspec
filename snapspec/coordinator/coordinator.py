@@ -116,6 +116,7 @@ class Coordinator:
         self._active_snapshot_task: asyncio.Task | None = None
         self._health_task: asyncio.Task | None = None
         self._status_task: asyncio.Task | None = None
+        self._background_tasks: set[asyncio.Task] = set()
         self._active_snapshot_node_ids: list[int] | None = None
         self._node_health: dict[int, dict[str, float | bool | str | None]] = {}
         self._status_metrics = None
@@ -469,6 +470,7 @@ class Coordinator:
         await self._cancel_task(self._health_task)
         await self._cancel_task(self._status_task)
         await self._drain_active_snapshot()
+        await self._cancel_background_tasks()
 
         if self.shutdown_nodes_on_stop:
             await self._shutdown_nodes()
@@ -535,9 +537,11 @@ class Coordinator:
         healthy = self.get_snapshot_participants()
         if healthy:
             ts = self.tick()
-            asyncio.ensure_future(
+            task = asyncio.create_task(
                 self.send_all(MessageType.RESUME_WORKLOAD.value, ts, node_ids=healthy)
             )
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
 
     async def run(self, duration_s: float):
         """Convenience: start, run snapshot loop for duration, then stop."""
@@ -656,6 +660,16 @@ class Coordinator:
                 await task
             except asyncio.CancelledError:
                 pass
+
+    async def _cancel_background_tasks(self):
+        tasks = [task for task in self._background_tasks if not task.done()]
+        if not tasks:
+            self._background_tasks.clear()
+            return
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._background_tasks.clear()
 
     async def _drain_active_snapshot(self):
         task = self._active_snapshot_task
