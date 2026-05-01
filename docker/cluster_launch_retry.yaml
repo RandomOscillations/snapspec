@@ -1,0 +1,32 @@
+nodes:
+  - id: 0
+    host: "node0"
+    port: 9000
+  - id: 1
+    host: "node1"
+    port: 9000
+  - id: 2
+    host: "node2"
+    port: 9000
+
+coordinator_node: 0
+
+workload:
+  write_rate: 80
+  cross_node_ratio: 0.8
+  effect_delay_ms: 25
+  total_tokens: 100000
+  block_size: 64
+  total_blocks: 32
+
+experiment:
+  duration_s: 8
+  snapshot_interval_s: 0.75
+  strategies: "speculative"
+  snapshot_transfer_policy: "speculate"
+  speculative_max_retries: 5
+  validation_timeout_s: 5.0
+  validation_delay_ms: 0
+  output_dir: "results/docker_launch_retry"
+
+block_store: "row"

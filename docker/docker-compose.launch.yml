@@ -10,7 +10,7 @@ services:
       - --id
       - "1"
       - --config
-      - docker/cluster_launch.yaml
+      - ${SNAPSPEC_LAUNCH_CONFIG:-docker/cluster_launch.yaml}
       - --node-only
     volumes:
       - ./launch_state/node1/archives:/tmp/snapspec_archives
@@ -35,7 +35,7 @@ services:
       - --id
       - "2"
       - --config
-      - docker/cluster_launch.yaml
+      - ${SNAPSPEC_LAUNCH_CONFIG:-docker/cluster_launch.yaml}
       - --node-only
     volumes:
       - ./launch_state/node2/archives:/tmp/snapspec_archives
@@ -60,7 +60,7 @@ services:
       - --id
       - "0"
       - --config
-      - docker/cluster_launch.yaml
+      - ${SNAPSPEC_LAUNCH_CONFIG:-docker/cluster_launch.yaml}
       - --duration
       - ${SNAPSPEC_DURATION:-6}
     depends_on:
