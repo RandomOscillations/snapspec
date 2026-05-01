@@ -252,6 +252,8 @@ class TestSpeculative:
         result = await execute(coord, ts=1)
         assert result.success
         assert result.retries == 2
+        assert result.invalid_cut_count == 2
+        assert result.causal_violation_count == 2
 
     @pytest.mark.asyncio
     async def test_exhausted_retries_falls_back(self, coord):
@@ -272,6 +274,8 @@ class TestSpeculative:
         result = await execute(coord, ts=1)
         assert result.success  # two-phase fallback succeeds
         assert result.retries == 3  # max_retries + 1 indicates fallback
+        assert result.invalid_cut_count == 3
+        assert result.fallback_used
         assert coord.call_count("DRAIN_WORKLOAD") == 1
         assert coord.snapshot_transfer_policy == "speculate"
 
@@ -285,6 +289,8 @@ class TestSpeculative:
         result = await execute(coord, ts=1)
 
         assert not result.success
+        assert result.retry_conservation_violation_count == 1
+        assert result.invalid_cut_count == 1
         assert coord.was_called("ABORT")
         assert not coord.was_called("COMMIT")
 

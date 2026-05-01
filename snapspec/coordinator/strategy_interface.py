@@ -44,6 +44,10 @@ class SnapshotResult:
     write_log_entries: int | None = None
     write_log_bytes: int | None = None
     dependency_tags_checked: int | None = None
+    invalid_cut_count: int = 0
+    retry_conservation_violation_count: int = 0
+    timeout_retry_count: int = 0
+    fallback_used: bool = False
 
 
 class CoordinatorProtocol(Protocol):

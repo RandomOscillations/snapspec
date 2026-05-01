@@ -60,6 +60,10 @@ class _SnapshotRecord:
     write_log_entries: int | None = None
     write_log_bytes: int | None = None
     dependency_tags_checked: int | None = None
+    invalid_cut_count: int = 0
+    retry_conservation_violation_count: int = 0
+    timeout_retry_count: int = 0
+    fallback_used: bool = False
 
 
 @dataclass
@@ -149,6 +153,10 @@ class MetricsCollector:
             write_log_entries=result.write_log_entries,
             write_log_bytes=result.write_log_bytes,
             dependency_tags_checked=result.dependency_tags_checked,
+            invalid_cut_count=result.invalid_cut_count,
+            retry_conservation_violation_count=result.retry_conservation_violation_count,
+            timeout_retry_count=result.timeout_retry_count,
+            fallback_used=result.fallback_used,
         ))
 
     def snapshot_counts(self) -> dict[str, int]:
@@ -295,8 +303,30 @@ class MetricsCollector:
             summary["avg_retry_rate"] = (
                 sum(s.retries for s in considered) / total
             )
+            summary["total_invalid_cuts"] = float(
+                sum(s.invalid_cut_count for s in considered)
+            )
+            summary["avg_invalid_cuts_per_snapshot"] = (
+                summary["total_invalid_cuts"] / total
+            )
+            summary["total_retry_conservation_violations"] = float(
+                sum(s.retry_conservation_violation_count for s in considered)
+            )
+            summary["total_timeout_retries"] = float(
+                sum(s.timeout_retry_count for s in considered)
+            )
+            summary["fallback_count"] = float(
+                sum(1 for s in considered if s.fallback_used)
+            )
+            summary["fallback_rate"] = summary["fallback_count"] / total
         else:
             summary["avg_retry_rate"] = 0.0
+            summary["total_invalid_cuts"] = 0.0
+            summary["avg_invalid_cuts_per_snapshot"] = 0.0
+            summary["total_retry_conservation_violations"] = 0.0
+            summary["total_timeout_retries"] = 0.0
+            summary["fallback_count"] = 0.0
+            summary["fallback_rate"] = 0.0
 
         # Latency percentiles
         durations = sorted(s.duration_ms for s in considered)
@@ -527,6 +557,8 @@ class MetricsCollector:
             "balance_sum", "in_transit_total", "message_count",
             "control_bytes", "write_log_entries", "write_log_bytes",
             "dependency_tags_checked", "delta_blocks",
+            "invalid_cut_count", "retry_conservation_violation_count",
+            "timeout_retry_count", "fallback_used",
         ]
         with open(path, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -562,6 +594,10 @@ class MetricsCollector:
                     "write_log_bytes": s.write_log_bytes,
                     "dependency_tags_checked": s.dependency_tags_checked,
                     "delta_blocks": ";".join(str(d) for d in (s.delta_blocks or [])),
+                    "invalid_cut_count": s.invalid_cut_count,
+                    "retry_conservation_violation_count": s.retry_conservation_violation_count,
+                    "timeout_retry_count": s.timeout_retry_count,
+                    "fallback_used": s.fallback_used,
                 })
 
     def write_samples_csv(self, path: str) -> None:

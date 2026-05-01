@@ -64,6 +64,10 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     delta_threshold = coordinator.delta_size_threshold_frac
     delta_blocks_at_discard: list[int] = []
     participant_node_ids = coordinator.get_snapshot_participants()
+    invalid_cut_count = 0
+    retry_conservation_violation_count = 0
+    timeout_retry_count = 0
+    retry_causal_violation_count = 0
 
     if len(participant_node_ids) < coordinator.minimum_snapshot_nodes():
         return SnapshotResult(
@@ -116,6 +120,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             finalize_ms = (time.monotonic() - finalize_start) * 1000
         except asyncio.TimeoutError:
             # Log collection too slow — abort and retry
+            timeout_retry_count += 1
             abort_responses = await coordinator.send_all(
                 _ABORT, attempt_ts, node_ids=participant_node_ids
             )
@@ -166,6 +171,8 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                 balance_sum = cons.balance_sum
                 in_transit_total = cons.in_transit_total
                 if not cons.valid:
+                    invalid_cut_count += 1
+                    retry_conservation_violation_count += 1
                     logger.debug(
                         "Speculative conservation failed at ts=%d attempt=%d: %s | balances=%s | in_transit_tags=%s | post_roles=%s",
                         attempt_ts,
@@ -231,7 +238,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                 archive_paths=_extract_archive_paths(commit_responses),
                 delta_blocks_at_discard=delta_blocks_at_discard,
                 causal_consistent=True,
-                causal_violation_count=0,
+                causal_violation_count=retry_causal_violation_count,
                 conservation_holds=conservation_ok,
                 recovery_verified=recovery_verified,
                 recovery_balance_sum=recovery_balance_sum,
@@ -249,9 +256,14 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                 write_log_entries=log_entries,
                 write_log_bytes=log_bytes,
                 dependency_tags_checked=dependency_tags,
+                invalid_cut_count=invalid_cut_count,
+                retry_conservation_violation_count=retry_conservation_violation_count,
+                timeout_retry_count=timeout_retry_count,
             )
 
         # Step 4b: Inconsistent — abort
+        invalid_cut_count += 1
+        retry_causal_violation_count += len(violations)
         abort_responses = await coordinator.send_all(
             _ABORT, attempt_ts, node_ids=participant_node_ids
         )
@@ -286,11 +298,15 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
         archive_paths=fallback_result.archive_paths,
         delta_blocks_at_discard=delta_blocks_at_discard,
         causal_consistent=fallback_result.causal_consistent,
-        causal_violation_count=fallback_result.causal_violation_count,
+        causal_violation_count=retry_causal_violation_count,
         conservation_holds=fallback_result.conservation_holds,
         recovery_verified=fallback_result.recovery_verified,
         recovery_balance_sum=fallback_result.recovery_balance_sum,
         recovery_conservation_holds=fallback_result.recovery_conservation_holds,
+        invalid_cut_count=invalid_cut_count,
+        retry_conservation_violation_count=retry_conservation_violation_count,
+        timeout_retry_count=timeout_retry_count,
+        fallback_used=True,
     )
 
 

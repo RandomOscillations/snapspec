@@ -93,6 +93,33 @@ class TestComputeSummary:
         assert s["avg_delta_blocks_at_discard"] == pytest.approx(16.0)
         assert s["max_delta_blocks_at_discard"] == 30
 
+    def test_retry_observability_metrics(self):
+        mc = _make_collector()
+        mc.on_snapshot_complete(
+            1, 100,
+            SnapshotResult(
+                success=True,
+                retries=2,
+                invalid_cut_count=2,
+                retry_conservation_violation_count=1,
+                timeout_retry_count=1,
+                fallback_used=True,
+            ),
+            duration_ms=50.0,
+        )
+        mc.on_snapshot_complete(
+            2, 200,
+            SnapshotResult(success=True, retries=0),
+            duration_ms=25.0,
+        )
+        s = mc.compute_summary()
+        assert s["total_invalid_cuts"] == pytest.approx(2.0)
+        assert s["avg_invalid_cuts_per_snapshot"] == pytest.approx(1.0)
+        assert s["total_retry_conservation_violations"] == pytest.approx(1.0)
+        assert s["total_timeout_retries"] == pytest.approx(1.0)
+        assert s["fallback_count"] == pytest.approx(1.0)
+        assert s["fallback_rate"] == pytest.approx(0.5)
+
     def test_extended_snapshot_metrics(self):
         mc = _make_collector()
         mc.on_snapshot_complete(
