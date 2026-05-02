@@ -706,6 +706,20 @@ class TestSnapshotRestoreVerification:
                 participants=[0, 1, 2],
                 strategy="speculative",
                 expected_total=100000,
+                balance_sum=99950,
+                in_transit_total=50,
+                channel_records=[
+                    {
+                        "tag": 17,
+                        "source": 0,
+                        "dest": 1,
+                        "amount": 50,
+                        "role": "pending_effect",
+                    }
+                ],
+                pending_transfers={
+                    "17": {"source": 0, "dest": 1, "amount": 50}
+                },
             )
             assert mark["type"] == MessageType.ACK.value
 
@@ -720,11 +734,95 @@ class TestSnapshotRestoreVerification:
             assert manifest["participants"] == [0, 1, 2]
             assert manifest["strategy"] == "speculative"
             assert manifest["expected_total"] == 100000
+            assert manifest["balance_sum"] == 99950
+            assert manifest["in_transit_total"] == 50
+            assert manifest["channel_records"] == [
+                {
+                    "tag": 17,
+                    "source": 0,
+                    "dest": 1,
+                    "amount": 50,
+                    "role": "pending_effect",
+                }
+            ]
+            assert manifest["pending_transfers"] == {
+                "17": {"source": 0, "dest": 1, "amount": 50}
+            }
             assert manifest["committed"] is True
 
             await conn.close()
         finally:
             await node.stop()
+
+    @pytest.mark.asyncio
+    async def test_recovery_conservation_counts_in_transit_tokens(self):
+        from snapspec.coordinator.coordinator import Coordinator
+
+        nodes = [
+            await _start_node(
+                MockBlockStore(block_size=64, total_blocks=4),
+                node_id=0,
+                initial_balance=400,
+            ),
+            await _start_node(
+                MockBlockStore(block_size=64, total_blocks=4),
+                node_id=1,
+                initial_balance=500,
+            ),
+        ]
+        coordinator = None
+        try:
+            node_configs = [
+                {
+                    "node_id": node.node_id,
+                    "host": "127.0.0.1",
+                    "port": node.actual_port,
+                }
+                for node in nodes
+            ]
+
+            async def _noop_strategy(*_args, **_kwargs):
+                raise AssertionError("strategy should not be called")
+
+            coordinator = Coordinator(
+                node_configs=node_configs,
+                strategy_fn=_noop_strategy,
+                snapshot_interval_s=1.0,
+                total_blocks_per_node=4,
+                health_check_interval_s=9999,
+                status_interval_s=9999,
+            )
+            coordinator.expected_total = 1000
+            await coordinator.start()
+
+            snapshot_ts = 1000
+            for conn in coordinator._connections:
+                snap = await conn.send_and_receive(
+                    MessageType.SNAP_NOW,
+                    coordinator.tick(),
+                    snapshot_ts=snapshot_ts,
+                )
+                assert snap["type"] == MessageType.SNAPPED.value
+                commit = await conn.send_and_receive(
+                    MessageType.COMMIT,
+                    coordinator.tick(),
+                )
+                assert commit["type"] == MessageType.ACK.value
+
+            rv = await coordinator.verify_snapshot_recovery(
+                snapshot_ts,
+                node_ids=[0, 1],
+                in_transit_total=100,
+            )
+            assert rv["restore_verified"] is True
+            assert rv["balance_sum"] == 900
+            assert rv["in_transit_total"] == 100
+            assert rv["conservation_holds"] is True
+        finally:
+            if coordinator is not None:
+                await coordinator.stop()
+            for node in nodes:
+                await node.stop()
 
     @pytest.mark.asyncio
     async def test_latest_global_snapshot_requires_every_node_manifest(self):

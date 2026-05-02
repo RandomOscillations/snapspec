@@ -1478,6 +1478,10 @@ class StorageNode:
                 "node_id": self.node_id,
                 "archive_path": archive_path,
                 "balance": int(self._archive_balances[archive_path]),
+                "balance_sum": int(msg.get("balance_sum", 0) or 0),
+                "in_transit_total": int(msg.get("in_transit_total", 0) or 0),
+                "channel_records": list(msg.get("channel_records", []) or []),
+                "pending_transfers": dict(msg.get("pending_transfers", {}) or {}),
                 "participants": [
                     int(node_id) for node_id in msg.get("participants", [])
                 ],

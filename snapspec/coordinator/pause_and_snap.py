@@ -182,7 +182,11 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     recovery_ms = None
     if coordinator.expected_total > 0:
         recovery_start = time.monotonic()
-        rv = await coordinator.verify_snapshot_recovery(ts, node_ids=responding_node_ids)
+        rv = await coordinator.verify_snapshot_recovery(
+            ts,
+            node_ids=responding_node_ids,
+            in_transit_total=int(in_transit_total or 0),
+        )
         recovery_ms = (time.monotonic() - recovery_start) * 1000
         recovery_verified = rv["restore_verified"]
         recovery_balance_sum = rv["balance_sum"]

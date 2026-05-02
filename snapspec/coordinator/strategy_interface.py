@@ -128,6 +128,7 @@ class CoordinatorProtocol(Protocol):
         self,
         snapshot_ts: int,
         node_ids: list[int] | None = None,
+        in_transit_total: int = 0,
     ) -> dict:
         """Verify that a committed snapshot can restore the exact captured state.
 

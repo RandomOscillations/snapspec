@@ -343,6 +343,7 @@ class Coordinator:
         self,
         snapshot_ts: int,
         node_ids: list[int] | None = None,
+        in_transit_total: int = 0,
     ) -> dict:
         """Verify that a committed snapshot can fully restore the captured state.
 
@@ -409,10 +410,12 @@ class Coordinator:
             "restore_verified": all_verified,
             "node_results": node_results,
             "balance_sum": total_balance,
+            "in_transit_total": in_transit_total,
             "expected_total": self.expected_total,
             "participating_nodes": participating,
             "conservation_holds": (
-                total_balance == self.expected_total_for_participants(participating)
+                total_balance + in_transit_total
+                == self.expected_total_for_participants(participating)
                 if self.expected_total > 0 else None
             ),
         }
@@ -702,6 +705,10 @@ class Coordinator:
             participants=participants,
             strategy=self._strategy_name(),
             expected_total=self.expected_total,
+            balance_sum=result.balance_sum,
+            in_transit_total=result.in_transit_total,
+            channel_records=self.channel_transfer_records,
+            pending_transfers=self.pending_transfer_records,
         )
         marker_messages = self._message_counter - before_messages
         marker_bytes = self._message_bytes - before_bytes
