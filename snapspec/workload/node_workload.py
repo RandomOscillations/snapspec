@@ -630,7 +630,7 @@ class NodeWorkload:
                 amount=row.amount,
                 debit_ts=row.debit_ts,
                 attempts=row.attempts,
-                state="DEBIT_APPLIED" if row.debit_ts > 0 else "INTENT_CREATED",
+                state=row.transfer_state,
             )
             self._pending_effects[pending.dep_tag] = pending
             self._transfer_amounts[pending.dep_tag] = pending.amount
@@ -661,6 +661,7 @@ class NodeWorkload:
                 amount=pending.amount,
                 debit_ts=pending.debit_ts,
                 attempts=pending.attempts,
+                transfer_state=pending.state,
             )
         )
 

@@ -19,6 +19,7 @@ class PendingTransferOutboxRow:
     amount: int
     debit_ts: int = 0
     attempts: int = 0
+    transfer_state: str = "INTENT_CREATED"
 
 
 class PendingTransferOutbox:
@@ -165,6 +166,7 @@ class PendingTransferOutbox:
                 amount INTEGER NOT NULL,
                 debit_ts INTEGER NOT NULL DEFAULT 0,
                 attempts INTEGER NOT NULL DEFAULT 0,
+                transfer_state TEXT NOT NULL DEFAULT 'INTENT_CREATED',
                 status TEXT NOT NULL DEFAULT 'PENDING',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -180,6 +182,11 @@ class PendingTransferOutbox:
             conn.execute(
                 f"ALTER TABLE {self._table_name} "
                 "ADD COLUMN debit_ts INTEGER NOT NULL DEFAULT 0"
+            )
+        if "transfer_state" not in columns:
+            conn.execute(
+                f"ALTER TABLE {self._table_name} "
+                "ADD COLUMN transfer_state TEXT NOT NULL DEFAULT 'INTENT_CREATED'"
             )
         conn.execute(
             f"""
@@ -199,7 +206,7 @@ class PendingTransferOutbox:
         rows = self._sqlite_conn.execute(
             f"""
             SELECT run_id, dep_tag, source_node_id, dest_node_id, block_id,
-                   data_b64, amount, debit_ts, attempts
+                   data_b64, amount, debit_ts, attempts, transfer_state
             FROM {self._table_name}
             WHERE run_id = ? AND status = 'PENDING'
             ORDER BY dep_tag
@@ -215,8 +222,8 @@ class PendingTransferOutbox:
             f"""
             INSERT INTO {self._table_name} (
                 run_id, dep_tag, source_node_id, dest_node_id, block_id,
-                data_b64, amount, debit_ts, attempts, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING')
+                data_b64, amount, debit_ts, attempts, transfer_state, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING')
             ON CONFLICT(run_id, dep_tag) DO UPDATE SET
                 source_node_id = excluded.source_node_id,
                 dest_node_id = excluded.dest_node_id,
@@ -225,6 +232,7 @@ class PendingTransferOutbox:
                 amount = excluded.amount,
                 debit_ts = excluded.debit_ts,
                 attempts = excluded.attempts,
+                transfer_state = excluded.transfer_state,
                 status = 'PENDING',
                 updated_at = CURRENT_TIMESTAMP
             """,
@@ -330,6 +338,7 @@ class PendingTransferOutbox:
                         amount BIGINT NOT NULL,
                         debit_ts BIGINT NOT NULL DEFAULT 0,
                         attempts INT NOT NULL DEFAULT 0,
+                        transfer_state VARCHAR(32) NOT NULL DEFAULT 'INTENT_CREATED',
                         status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -344,6 +353,15 @@ class PendingTransferOutbox:
                         f"""
                         ALTER TABLE {self._table_name}
                         ADD COLUMN debit_ts BIGINT NOT NULL DEFAULT 0
+                        """
+                    )
+                except Exception:
+                    pass
+                try:
+                    await cur.execute(
+                        f"""
+                        ALTER TABLE {self._table_name}
+                        ADD COLUMN transfer_state VARCHAR(32) NOT NULL DEFAULT 'INTENT_CREATED'
                         """
                     )
                 except Exception:
@@ -367,7 +385,7 @@ class PendingTransferOutbox:
                 await cur.execute(
                     f"""
                     SELECT run_id, dep_tag, source_node_id, dest_node_id, block_id,
-                           data_b64, amount, debit_ts, attempts
+                           data_b64, amount, debit_ts, attempts, transfer_state
                     FROM {self._table_name}
                     WHERE run_id = %s AND status = 'PENDING'
                     ORDER BY dep_tag
@@ -386,8 +404,8 @@ class PendingTransferOutbox:
                     f"""
                     INSERT INTO {self._table_name} (
                         run_id, dep_tag, source_node_id, dest_node_id, block_id,
-                        data_b64, amount, debit_ts, attempts, status
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'PENDING')
+                        data_b64, amount, debit_ts, attempts, transfer_state, status
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PENDING')
                     ON DUPLICATE KEY UPDATE
                         source_node_id = VALUES(source_node_id),
                         dest_node_id = VALUES(dest_node_id),
@@ -396,6 +414,7 @@ class PendingTransferOutbox:
                         amount = VALUES(amount),
                         debit_ts = VALUES(debit_ts),
                         attempts = VALUES(attempts),
+                        transfer_state = VALUES(transfer_state),
                         status = 'PENDING'
                     """,
                     _row_tuple(row),
@@ -485,6 +504,7 @@ def _row_tuple(row: PendingTransferOutboxRow):
         row.amount,
         row.debit_ts,
         row.attempts,
+        row.transfer_state,
     )
 
 
@@ -499,4 +519,5 @@ def _row_from_db(row) -> PendingTransferOutboxRow:
         amount=int(row[6]),
         debit_ts=int(row[7]),
         attempts=int(row[8]),
+        transfer_state=str(row[9]) if len(row) > 9 else "INTENT_CREATED",
     )

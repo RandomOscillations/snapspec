@@ -107,6 +107,44 @@ class TestWorkloadLifecycle:
         assert await outbox.list_pending("node-0") == []
         await outbox.close()
 
+    @pytest.mark.asyncio
+    async def test_outbox_preserves_fine_grained_transfer_state(self, tmp_path):
+        outbox = PendingTransferOutbox.for_sqlite(str(tmp_path / "outbox.db"))
+        await outbox.upsert_pending(
+            PendingTransferOutboxRow(
+                run_id="node-0",
+                dep_tag=42,
+                source_node_id=0,
+                dest_node_id=1,
+                block_id=7,
+                data=b"x" * 64,
+                amount=123,
+                debit_ts=99,
+                attempts=2,
+                transfer_state="CREDIT_SENT",
+            )
+        )
+
+        rows = await outbox.list_pending("node-0")
+        assert len(rows) == 1
+        assert rows[0].transfer_state == "CREDIT_SENT"
+
+        wl = NodeWorkload(
+            node_id=0, local_port=0,
+            remote_nodes=[],
+            write_rate=1, cross_node_ratio=0.0,
+            initial_balance=10_000, total_tokens=30_000, num_nodes=NUM_NODES,
+            block_size=64, total_blocks=32,
+            pending_outbox=outbox,
+            outbox_run_id="node-0",
+        )
+        await wl._load_pending_effects_from_outbox()
+
+        pending = wl.pending_transfer_records[42]
+        assert pending["transfer_state"] == "CREDIT_SENT"
+        assert pending["attempts"] == 2
+        await outbox.close()
+
 
 class TestLocalWrites:
     @pytest.mark.asyncio
