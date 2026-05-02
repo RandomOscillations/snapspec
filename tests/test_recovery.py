@@ -20,6 +20,7 @@ import pytest_asyncio
 from snapspec.network.connection import NodeConnection
 from snapspec.network.protocol import MessageType
 from snapspec.node.server import StorageNode, NodeState, MockBlockStore
+from launch import latest_global_committed_snapshot_ts
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────
@@ -681,3 +682,93 @@ class TestSnapshotRestoreVerification:
             await conn.close()
         finally:
             await node.stop()
+
+    @pytest.mark.asyncio
+    async def test_global_commit_manifest_is_queryable_after_commit(self):
+        bs = MockBlockStore(block_size=64, total_blocks=4)
+        node = await _start_node(bs, initial_balance=1000)
+        try:
+            conn = await _connect(node)
+
+            await conn.send_and_receive(MessageType.SNAP_NOW, 1, snapshot_ts=800)
+            await conn.send_and_receive(MessageType.COMMIT, 2)
+
+            before = await conn.send_and_receive(
+                MessageType.GET_SNAPSHOT_MANIFESTS, 3
+            )
+            assert before["type"] == MessageType.SNAPSHOT_MANIFESTS.value
+            assert before["manifests"] == []
+
+            mark = await conn.send_and_receive(
+                MessageType.MARK_SNAPSHOT_COMMITTED,
+                4,
+                snapshot_ts=800,
+                participants=[0, 1, 2],
+                strategy="speculative",
+                expected_total=100000,
+            )
+            assert mark["type"] == MessageType.ACK.value
+
+            after = await conn.send_and_receive(
+                MessageType.GET_SNAPSHOT_MANIFESTS, 5
+            )
+            assert after["type"] == MessageType.SNAPSHOT_MANIFESTS.value
+            assert len(after["manifests"]) == 1
+            manifest = after["manifests"][0]
+            assert manifest["snapshot_ts"] == 800
+            assert manifest["node_id"] == 0
+            assert manifest["participants"] == [0, 1, 2]
+            assert manifest["strategy"] == "speculative"
+            assert manifest["expected_total"] == 100000
+            assert manifest["committed"] is True
+
+            await conn.close()
+        finally:
+            await node.stop()
+
+    @pytest.mark.asyncio
+    async def test_latest_global_snapshot_requires_every_node_manifest(self):
+        nodes = [
+            await _start_node(
+                MockBlockStore(block_size=64, total_blocks=4),
+                node_id=node_id,
+                initial_balance=1000,
+            )
+            for node_id in (0, 1)
+        ]
+        try:
+            conns = [await _connect(node) for node in nodes]
+            for conn in conns:
+                await conn.send_and_receive(MessageType.SNAP_NOW, 1, snapshot_ts=900)
+                await conn.send_and_receive(MessageType.COMMIT, 2)
+
+            await conns[0].send_and_receive(
+                MessageType.MARK_SNAPSHOT_COMMITTED,
+                3,
+                snapshot_ts=900,
+                participants=[0, 1],
+                strategy="pause_and_snap",
+                expected_total=2000,
+            )
+
+            node_configs = [
+                {"node_id": node.node_id, "host": "127.0.0.1", "port": node.actual_port}
+                for node in nodes
+            ]
+            assert await latest_global_committed_snapshot_ts(node_configs) is None
+
+            await conns[1].send_and_receive(
+                MessageType.MARK_SNAPSHOT_COMMITTED,
+                4,
+                snapshot_ts=900,
+                participants=[0, 1],
+                strategy="pause_and_snap",
+                expected_total=2000,
+            )
+            assert await latest_global_committed_snapshot_ts(node_configs) == 900
+
+            for conn in conns:
+                await conn.close()
+        finally:
+            for node in nodes:
+                await node.stop()

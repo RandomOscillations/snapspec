@@ -250,6 +250,40 @@ async def restore_global_snapshot(node_configs: list[dict], snapshot_ts: int) ->
     return True
 
 
+async def latest_global_committed_snapshot_ts(
+    node_configs: list[dict],
+) -> int | None:
+    """Return the latest snapshot timestamp marked committed on every node."""
+    responses = await asyncio.gather(*[
+        _node_rpc(cfg, MessageType.GET_SNAPSHOT_MANIFESTS)
+        for cfg in node_configs
+    ])
+    expected_nodes = {int(cfg["node_id"]) for cfg in node_configs}
+    per_node_ts: list[set[int]] = []
+
+    for cfg, resp in zip(node_configs, responses):
+        if resp is None or resp.get("type") != MessageType.SNAPSHOT_MANIFESTS.value:
+            print(f"  Snapshot manifest query failed on node {cfg['node_id']}: {resp}")
+            return None
+        node_ts: set[int] = set()
+        for manifest in resp.get("manifests", []):
+            if not manifest.get("committed", False):
+                continue
+            participants = {int(node_id) for node_id in manifest.get("participants", [])}
+            if participants != expected_nodes:
+                continue
+            try:
+                node_ts.add(int(manifest["snapshot_ts"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+        per_node_ts.append(node_ts)
+
+    if not per_node_ts:
+        return None
+    common = set.intersection(*per_node_ts)
+    return max(common) if common else None
+
+
 async def _resume_nodes_after_restore(node_configs: list[dict]) -> None:
     await asyncio.gather(*[
         _node_rpc(cfg, MessageType.RESUME)
@@ -639,9 +673,18 @@ async def run_node(config: dict, node_id: int, node_only: bool = False,
     print("All nodes ready.\n")
 
     if recover:
-        snapshot_ts = node.latest_snapshot_ts()
+        snapshot_ts = await latest_global_committed_snapshot_ts(node_configs)
         if snapshot_ts is None:
-            print("  Recovery requested, but this node has no committed snapshot archive.")
+            snapshot_ts = node.latest_snapshot_ts()
+            if snapshot_ts is not None:
+                print(
+                    "  WARNING: no global commit manifest found; "
+                    f"falling back to local archive {snapshot_ts}."
+                )
+        else:
+            print(f"  Found global committed snapshot {snapshot_ts}.")
+        if snapshot_ts is None:
+            print("  Recovery requested, but no committed snapshot was found.")
         else:
             print(f"  Restoring all nodes to global snapshot {snapshot_ts}...")
             restored = await restore_global_snapshot(node_configs, snapshot_ts)

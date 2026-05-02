@@ -243,6 +243,7 @@ class StorageNode:
 
         # Archive metadata: maps archive_path -> snapshot-time balance
         self._archive_balances: dict[str, int] = {}
+        self._global_snapshot_manifests: dict[str, dict[str, Any]] = {}
         self._restore_prepared_snapshot_ts: int | None = None
         self._restore_prepared_archive_path: str | None = None
 
@@ -387,6 +388,13 @@ class StorageNode:
                 for key, value in operations.items()
                 if isinstance(value, dict)
             }
+        manifests = state.get("global_snapshot_manifests", {})
+        if isinstance(manifests, dict):
+            self._global_snapshot_manifests = {
+                str(key): dict(value)
+                for key, value in manifests.items()
+                if isinstance(value, dict)
+            }
 
         # Restore block data from latest archive if available
         latest_archive = state.get("latest_archive_path")
@@ -443,6 +451,12 @@ class StorageNode:
                 self.node_id,
             )
 
+    def _archive_exists(self, archive_path: str) -> bool:
+        if os.path.isfile(archive_path):
+            return True
+        get_archived_blocks = getattr(self.block_store, "get_archived_blocks", None)
+        return callable(get_archived_blocks) and get_archived_blocks(archive_path) is not None
+
     def _persist_runtime_state(self):
         """Persist the mutable token/accounting state needed after restart."""
         os.makedirs(self.archive_dir, exist_ok=True)
@@ -465,6 +479,7 @@ class StorageNode:
             "latest_snapshot_ts": latest_ts,
             "applied_write_acks": self._applied_write_acks,
             "transfer_operations": self._transfer_operations,
+            "global_snapshot_manifests": self._global_snapshot_manifests,
         }
         tmp_path = f"{self._state_path}.tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
@@ -1115,6 +1130,7 @@ class StorageNode:
             self._snapshot_ground_truth = {}
             self._applied_write_acks = {}
             self._transfer_operations = {}
+            self._global_snapshot_manifests = {}
             self._workload_epoch += 1
             self._persist_runtime_state()
 
@@ -1255,7 +1271,7 @@ class StorageNode:
                 self._writes_paused = True
                 paused = True
 
-                if not os.path.isfile(archive_path):
+                if not self._archive_exists(archive_path):
                     await self._send_error(
                         writer, msg, f"No archive found at {archive_path}"
                     )
@@ -1329,7 +1345,7 @@ class StorageNode:
         balance: int | None = None
         async with self._state_lock:
             self._writes_paused = True
-            if not os.path.isfile(archive_path):
+            if not self._archive_exists(archive_path):
                 error = f"No archive found at {archive_path}"
             elif archive_path not in self._archive_balances:
                 error = f"No archived balance recorded for {archive_path}"
@@ -1426,6 +1442,75 @@ class StorageNode:
             self._local_workload.resume_transfers()
         await self._send(writer, MessageType.ACK, ts)
 
+    async def _handle_mark_snapshot_committed(
+        self, msg: dict, writer: asyncio.StreamWriter
+    ):
+        """Persist a coordinator-certified global commit marker for recovery."""
+        ts = msg["logical_timestamp"]
+        snapshot_ts = msg.get("snapshot_ts")
+        if snapshot_ts is None:
+            await self._send_error(
+                writer, msg, "MARK_SNAPSHOT_COMMITTED requires snapshot_ts"
+            )
+            return
+
+        archive_path = f"{self.archive_dir}/node{self.node_id}_snap_{snapshot_ts}"
+        async with self._state_lock:
+            if not self._archive_exists(archive_path):
+                await self._send_error(
+                    writer, msg, f"No archive found at {archive_path}"
+                )
+                return
+            if archive_path not in self._archive_balances:
+                await self._send_error(
+                    writer, msg, f"No archived balance recorded for {archive_path}"
+                )
+                return
+
+            manifest = {
+                "snapshot_ts": int(snapshot_ts),
+                "node_id": self.node_id,
+                "archive_path": archive_path,
+                "balance": int(self._archive_balances[archive_path]),
+                "participants": [
+                    int(node_id) for node_id in msg.get("participants", [])
+                ],
+                "strategy": msg.get("strategy"),
+                "expected_total": int(msg.get("expected_total", 0) or 0),
+                "committed": True,
+            }
+            self._global_snapshot_manifests[str(snapshot_ts)] = manifest
+            self._persist_runtime_state()
+
+        log_event(
+            logger,
+            component=self._component,
+            event="global_snapshot_marked",
+            snapshot_ts=snapshot_ts,
+            participants=manifest["participants"],
+            archive=archive_path,
+        )
+        await self._send(writer, MessageType.ACK, ts, snapshot_ts=snapshot_ts)
+
+    async def _handle_get_snapshot_manifests(
+        self, msg: dict, writer: asyncio.StreamWriter
+    ):
+        ts = msg["logical_timestamp"]
+        async with self._state_lock:
+            manifests = [
+                dict(manifest)
+                for _, manifest in sorted(
+                    self._global_snapshot_manifests.items(),
+                    key=lambda item: int(item[0]),
+                )
+            ]
+        await self._send(
+            writer,
+            MessageType.SNAPSHOT_MANIFESTS,
+            ts,
+            manifests=manifests,
+        )
+
     async def _handle_shutdown(self, msg: dict, writer: asyncio.StreamWriter):
         ts = msg["logical_timestamp"]
 
@@ -1462,6 +1547,8 @@ class StorageNode:
         MessageType.RESTORE_PREPARE.value: _handle_restore_prepare,
         MessageType.RESTORE_COMMIT.value: _handle_restore_commit,
         MessageType.RESTORE_ABORT.value: _handle_restore_abort,
+        MessageType.MARK_SNAPSHOT_COMMITTED.value: _handle_mark_snapshot_committed,
+        MessageType.GET_SNAPSHOT_MANIFESTS.value: _handle_get_snapshot_manifests,
         MessageType.DRAIN_WORKLOAD.value: _handle_drain_workload,
         MessageType.RESUME_WORKLOAD.value: _handle_resume_workload,
         MessageType.GET_WORKLOAD_STATS.value: _handle_get_workload_stats,

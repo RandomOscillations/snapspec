@@ -596,6 +596,8 @@ class Coordinator:
 
         snap_start = time.monotonic()
         result = await self.strategy_fn(self, ts)
+        if result.success and result.participant_node_ids:
+            await self._mark_global_snapshot_committed(ts, result)
         snap_end = time.monotonic()
 
         duration_ms = (snap_end - snap_start) * 1000
@@ -652,6 +654,48 @@ class Coordinator:
             )
 
         return result
+
+    async def _mark_global_snapshot_committed(
+        self, snapshot_ts: int, result: SnapshotResult
+    ) -> None:
+        """Record a global commit marker on every participant for recovery."""
+        participants = result.participant_node_ids or []
+        if not participants:
+            return
+
+        before_messages = self._message_counter
+        before_bytes = self._message_bytes
+        responses = await self.send_all(
+            MessageType.MARK_SNAPSHOT_COMMITTED.value,
+            self.tick(),
+            node_ids=participants,
+            snapshot_ts=snapshot_ts,
+            participants=participants,
+            strategy=self._strategy_name(),
+            expected_total=self.expected_total,
+        )
+        marker_messages = self._message_counter - before_messages
+        marker_bytes = self._message_bytes - before_bytes
+        if result.message_count is not None:
+            result.message_count += marker_messages
+        if result.control_bytes is not None:
+            result.control_bytes += marker_bytes
+        self.reset_message_counter()
+
+        failed = [
+            participants[i]
+            for i, response in enumerate(responses)
+            if response is None or response.get("type") != MessageType.ACK.value
+        ]
+        if failed:
+            log_event(
+                logger,
+                component=self._component,
+                event="global_snapshot_mark_failed",
+                level=logging.WARNING,
+                snapshot_ts=snapshot_ts,
+                failed_nodes=failed,
+            )
 
     async def _cancel_task(self, task: asyncio.Task | None):
         if task and not task.done():
