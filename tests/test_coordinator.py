@@ -153,6 +153,37 @@ class TestHealthChecks:
         await coord.stop()
 
 
+class TestSnapshotParticipantPolicy:
+    @pytest.mark.asyncio
+    async def test_default_snapshot_policy_requires_all_nodes(self, nodes):
+        configs = _configs(nodes)
+        coord = Coordinator(configs, _simple_strategy, **_NO_BG_TASKS)
+        await coord.start()
+
+        assert coord.minimum_snapshot_nodes() == NUM_NODES
+
+        coord._node_health[1]["healthy"] = False
+        assert coord.get_snapshot_participants() == [0, 2]
+        assert len(coord.get_snapshot_participants()) < coord.minimum_snapshot_nodes()
+
+        await coord.stop()
+
+    @pytest.mark.asyncio
+    async def test_explicit_min_snapshot_nodes_allows_partial_mode(self, nodes):
+        configs = _configs(nodes)
+        coord = Coordinator(
+            configs,
+            _simple_strategy,
+            min_snapshot_nodes=2,
+            **_NO_BG_TASKS,
+        )
+        await coord.start()
+
+        assert coord.minimum_snapshot_nodes() == 2
+
+        await coord.stop()
+
+
 class TestLogCollection:
     @pytest.mark.asyncio
     async def test_collect_empty_logs(self, nodes):

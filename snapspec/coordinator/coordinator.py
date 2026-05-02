@@ -787,7 +787,7 @@ class Coordinator:
     def minimum_snapshot_nodes(self) -> int:
         if self._min_snapshot_nodes is not None:
             return self._min_snapshot_nodes
-        return max(2, (len(self._connections) // 2) + 1)
+        return len(self._connections)
 
     def get_snapshot_participants(self) -> list[int]:
         return sorted(self.get_healthy_nodes())

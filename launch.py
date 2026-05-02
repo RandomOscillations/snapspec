@@ -424,6 +424,7 @@ async def run_strategy(
         health_check_timeout_s=0.5,
         health_unhealthy_after_s=3.0,
         status_interval_s=5.0,
+        min_snapshot_nodes=exp_cfg.get("min_snapshot_nodes"),
     )
     coordinator.expected_total = total_tokens
     coordinator.transfer_amounts = {}
