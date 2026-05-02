@@ -97,6 +97,7 @@ class Coordinator:
         # Workload reference — set via set_workload() for drain coordination
         self._workload = None
         self._remote_pending_transfers: dict[int, dict] = {}
+        self._channel_transfer_records: list[dict[str, Any]] = []
 
         # Connections: ordered list matching node_configs order
         self._connections: list[NodeConnection] = []
@@ -250,7 +251,7 @@ class Coordinator:
     ) -> tuple[list[list[dict[str, Any]]], list[int], list[int]]:
         connections = self._select_connections(node_ids)
 
-        async def _collect_one(conn: NodeConnection) -> tuple[int, list[dict], int, dict, dict, bool]:
+        async def _collect_one(conn: NodeConnection) -> tuple[int, list[dict], int, dict, dict, list[dict], bool]:
             self._message_counter += 1
             self._message_bytes += self._estimate_message_bytes(msg_type, ts)
             resp = await self._send_with_timeout(
@@ -261,7 +262,7 @@ class Coordinator:
                 error_context="Write log collection",
             )
             if resp is None:
-                return conn.node_id, [], 0, {}, {}, False
+                return conn.node_id, [], 0, {}, {}, [], False
             self._message_counter += 1
             self._message_bytes += self._estimate_response_bytes(resp)
             entries = [
@@ -271,7 +272,20 @@ class Coordinator:
             snapshot_balance = resp.get("snapshot_balance", resp.get("balance", 0))
             node_transfers = resp.get("transfer_amounts", {})
             node_pending = resp.get("pending_transfer_records", {})
-            return conn.node_id, entries, snapshot_balance, node_transfers, node_pending, True
+            channel_records = [
+                {**record, "node_id": conn.node_id}
+                for record in resp.get("transfer_operations", [])
+                if isinstance(record, dict)
+            ]
+            return (
+                conn.node_id,
+                entries,
+                snapshot_balance,
+                node_transfers,
+                node_pending,
+                channel_records,
+                True,
+            )
 
         pairs = await asyncio.gather(
             *[_collect_one(c) for c in connections]
@@ -280,7 +294,16 @@ class Coordinator:
         snapshot_balances = []
         responding_node_ids = []
         fresh_pending: dict[int, dict] = {}
-        for node_id, entries, snapshot_balance, node_transfers, node_pending, ok in pairs:
+        fresh_channel_records: list[dict[str, Any]] = []
+        for (
+            node_id,
+            entries,
+            snapshot_balance,
+            node_transfers,
+            node_pending,
+            channel_records,
+            ok,
+        ) in pairs:
             if not ok:
                 continue
             responding_node_ids.append(node_id)
@@ -294,8 +317,10 @@ class Coordinator:
             if node_pending:
                 for tag, record in node_pending.items():
                     fresh_pending[int(tag)] = record
+            fresh_channel_records.extend(channel_records)
 
         self._remote_pending_transfers = fresh_pending
+        self._channel_transfer_records = fresh_channel_records
         self._update_last_known_balances(responding_node_ids, snapshot_balances)
         return all_logs, snapshot_balances, responding_node_ids
 
@@ -510,6 +535,10 @@ class Coordinator:
             if local:
                 records.update(local)
         return records
+
+    @property
+    def channel_transfer_records(self) -> list[dict[str, Any]]:
+        return list(self._channel_transfer_records)
 
     async def drain_workload(self) -> None:
         """Drain in-flight transfers on ALL nodes' workloads.

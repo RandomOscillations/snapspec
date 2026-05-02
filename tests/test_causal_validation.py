@@ -24,6 +24,16 @@ def _entry(tag: int, role: str, block_id: int = 0, timestamp: int = 1, partner: 
     }
 
 
+def _op(tag: int, role: str, node_id: int, partner: int, amount: int = 1):
+    return {
+        "dependency_tag": tag,
+        "role": role,
+        "node_id": node_id,
+        "partner_node_id": partner,
+        "amount": amount,
+    }
+
+
 class TestCausalValidation:
     """Test causal consistency validation with known scenarios."""
 
@@ -147,3 +157,41 @@ class TestCausalValidation:
         ]
         result, violations = validate_causal(logs)
         assert result == ValidationResult.INCONSISTENT
+
+    def test_cause_only_post_is_valid_when_credit_never_applied(self):
+        """With channel metadata, CAUSE-only can mean the transfer is entirely post-cut."""
+        logs = [
+            [_entry(tag=999, role="CAUSE", partner=1)],
+            [],
+        ]
+        result, violations = validate_causal(
+            logs,
+            channel_records=[_op(tag=999, role="CAUSE", node_id=0, partner=1)],
+        )
+        assert result == ValidationResult.CONSISTENT
+        assert violations == []
+
+    def test_cause_only_post_is_invalid_when_credit_applied_pre_cut(self):
+        logs = [
+            [_entry(tag=999, role="CAUSE", partner=1)],
+            [],
+        ]
+        result, violations = validate_causal(
+            logs,
+            channel_records=[
+                _op(tag=999, role="CAUSE", node_id=0, partner=1),
+                _op(tag=999, role="EFFECT", node_id=1, partner=0),
+            ],
+        )
+        assert result == ValidationResult.INCONSISTENT
+        assert len(violations) == 1
+        assert violations[0].dependency_tag == 999
+
+    def test_credit_pre_cut_without_debit_is_invalid_from_channel_metadata(self):
+        result, violations = validate_causal(
+            [[], []],
+            channel_records=[_op(tag=999, role="EFFECT", node_id=1, partner=0)],
+        )
+        assert result == ValidationResult.INCONSISTENT
+        assert len(violations) == 1
+        assert violations[0].present_role == "EFFECT"

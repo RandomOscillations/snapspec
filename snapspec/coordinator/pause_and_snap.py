@@ -130,6 +130,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             participating_node_ids=set(responding_node_ids),
             pending_transfers=coordinator.pending_transfer_records,
             snapshot_ts=ts,
+            channel_records=coordinator.channel_transfer_records,
         )
         conservation_ok = cons.valid
         balance_sum = cons.balance_sum

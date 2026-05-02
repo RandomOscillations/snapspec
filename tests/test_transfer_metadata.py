@@ -73,6 +73,8 @@ class TestTransferMetadata:
             dest_log = await dest_conn.send_and_receive(MessageType.GET_WRITE_LOG, 4)
             source_entry = source_log["entries"][0]
             dest_entry = dest_log["entries"][0]
+            source_op = source_log["transfer_operations"][0]
+            dest_op = dest_log["transfer_operations"][0]
 
             assert source_entry["amount"] == 123
             assert source_entry["balance_delta"] == -123
@@ -85,6 +87,12 @@ class TestTransferMetadata:
             assert dest_entry["transfer_state"] == "CREDIT_APPLIED"
             assert dest_entry["source_node_id"] == 0
             assert dest_entry["dest_node_id"] == 1
+            assert source_op["dependency_tag"] == 77
+            assert source_op["transfer_state"] == "DEBIT_APPLIED"
+            assert source_op["amount"] == 123
+            assert dest_op["dependency_tag"] == 77
+            assert dest_op["transfer_state"] == "CREDIT_APPLIED"
+            assert dest_op["amount"] == 123
 
             await source_conn.send_and_receive(MessageType.ABORT, 5)
             await dest_conn.send_and_receive(MessageType.ABORT, 5)

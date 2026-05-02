@@ -38,6 +38,8 @@ class CausalViolation:
 def validate_causal(
     all_node_logs: list[list[dict]],
     participating_node_ids: set[int] | None = None,
+    channel_records: list[dict] | None = None,
+    pending_transfers: dict[int, dict] | None = None,
 ) -> tuple[ValidationResult, list[CausalViolation]]:
     """Validate causal consistency across all node write logs.
 
@@ -53,6 +55,7 @@ def validate_causal(
     # Build map: dependency_tag -> set of roles that appear in the logs
     # (i.e., roles that are POST-snapshot / NOT in the snapshot)
     tag_to_roles: dict[int, set[str]] = defaultdict(set)
+    tag_to_applied_roles: dict[int, set[str]] = defaultdict(set)
     skipped_tags: set[int] = set()
 
     for node_log in all_node_logs:
@@ -71,32 +74,79 @@ def validate_causal(
                     skipped_tags.add(tag)
                     continue
             tag_to_roles[tag].add(role)
+            tag_to_applied_roles[tag].add(role)
+
+    for record in channel_records or []:
+        tag = int(record.get("dependency_tag", 0) or 0)
+        role = record.get("role", "NONE")
+        if tag == 0 or role == "NONE":
+            continue
+        if participating_node_ids is not None:
+            node_id = record.get("node_id")
+            partner_node_id = record.get("partner_node_id")
+            if (
+                node_id not in participating_node_ids
+                or partner_node_id not in participating_node_ids
+            ):
+                skipped_tags.add(tag)
+                continue
+        tag_to_applied_roles[tag].add(role)
+
+    for tag, pending in (pending_transfers or {}).items():
+        tag = int(tag)
+        if int(pending.get("debit_ts", 0) or 0) <= 0:
+            continue
+        if participating_node_ids is not None:
+            source_node_id = pending.get("source_node_id")
+            dest_node_id = pending.get("dest_node_id")
+            if (
+                source_node_id not in participating_node_ids
+                or dest_node_id not in participating_node_ids
+            ):
+                skipped_tags.add(tag)
+                continue
+        tag_to_applied_roles[tag].add("CAUSE")
 
     violations = []
-    for tag, roles in tag_to_roles.items():
+    channel_metadata_available = bool(channel_records or pending_transfers)
+    for tag in set(tag_to_roles) | set(tag_to_applied_roles):
         if tag in skipped_tags:
             continue
+        roles = tag_to_roles.get(tag, set())
+        applied_roles = tag_to_applied_roles.get(tag, set())
         if roles == {"CAUSE", "EFFECT"}:
             # Both post-snapshot → neither in snapshot → consistent
             continue
         elif roles == {"CAUSE"}:
-            # Only debit is post-snapshot → credit is in snapshot without debit
-            violations.append(CausalViolation(
-                dependency_tag=tag,
-                present_role="CAUSE",
-                missing_role="EFFECT",
-                explanation=(
-                    f"Tag {tag}: debit is post-snapshot but credit is in the snapshot. "
-                    "Snapshot shows tokens appearing from nowhere."
-                ),
-            ))
+            if not channel_metadata_available or "EFFECT" in applied_roles:
+                # Debit is post-snapshot while the destination credit already
+                # exists. Since EFFECT is not in the post log, it is in the cut.
+                violations.append(CausalViolation(
+                    dependency_tag=tag,
+                    present_role="CAUSE",
+                    missing_role="EFFECT",
+                    explanation=(
+                        f"Tag {tag}: debit is post-snapshot but credit is in the snapshot. "
+                        "Snapshot shows tokens appearing from nowhere."
+                    ),
+                ))
+            # If EFFECT has not been applied anywhere, the transfer belongs to
+            # the discarded future, not to this cut. This case is valid and is
+            # only distinguishable when channel metadata is available.
         elif roles == {"EFFECT"}:
             # Only credit is post-snapshot → debit is in snapshot and the
             # transfer is in transit. Conservation accounts for this amount.
             continue
-        # Note: if neither role is in the logs, we never see the tag here,
-        # which means both are pre-snapshot → both in snapshot → consistent.
-        # This case is handled implicitly by not being in tag_to_roles.
+        elif not roles and "EFFECT" in applied_roles and "CAUSE" not in applied_roles:
+            violations.append(CausalViolation(
+                dependency_tag=tag,
+                present_role="EFFECT",
+                missing_role="CAUSE",
+                explanation=(
+                    f"Tag {tag}: credit is in the snapshot but no matching debit "
+                    "was observed in channel metadata."
+                ),
+            ))
 
     if violations:
         return (ValidationResult.INCONSISTENT, violations)

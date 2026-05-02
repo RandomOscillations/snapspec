@@ -38,6 +38,7 @@ def validate_conservation(
     participating_node_ids: set[int] | None = None,
     pending_transfers: dict[int, dict] | None = None,
     snapshot_ts: int | None = None,
+    channel_records: list[dict] | None = None,
 ) -> ConservationResult:
     """Validate token conservation across a snapshot.
 
@@ -60,6 +61,7 @@ def validate_conservation(
     #
     # Build tag -> set of roles that are POST-snapshot (in the logs)
     tag_to_post_roles: dict[int, set[str]] = defaultdict(set)
+    tag_to_applied_roles: dict[int, set[str]] = defaultdict(set)
     tag_to_amount: dict[int, int] = {}
     skipped_tags: set[int] = set()
     for node_log in all_node_logs:
@@ -78,62 +80,72 @@ def validate_conservation(
                     skipped_tags.add(tag)
                     continue
             tag_to_post_roles[tag].add(role)
+            tag_to_applied_roles[tag].add(role)
             amount = _entry_amount(entry)
             if amount > 0:
                 tag_to_amount[tag] = amount
 
+    for record in channel_records or []:
+        tag = int(record.get("dependency_tag", 0) or 0)
+        role = record.get("role", "NONE")
+        if tag == 0 or role == "NONE":
+            continue
+        if participating_node_ids is not None:
+            node_id = record.get("node_id")
+            partner_node_id = record.get("partner_node_id")
+            if (
+                node_id not in participating_node_ids
+                or partner_node_id not in participating_node_ids
+            ):
+                skipped_tags.add(tag)
+                continue
+        tag_to_applied_roles[tag].add(role)
+        amount = _entry_amount(record)
+        if amount > 0:
+            tag_to_amount[tag] = amount
+
+    for tag, pending in (pending_transfers or {}).items():
+        tag = int(tag)
+        if int(pending.get("debit_ts", 0) or 0) <= 0:
+            continue
+        source_node_id = pending.get("source_node_id")
+        dest_node_id = pending.get("dest_node_id")
+        if participating_node_ids is not None and (
+            source_node_id not in participating_node_ids
+            or dest_node_id not in participating_node_ids
+        ):
+            skipped_tags.add(tag)
+            continue
+        tag_to_applied_roles[tag].add("CAUSE")
+        amount = int(pending.get("amount", 0) or 0)
+        if amount > 0:
+            tag_to_amount[tag] = amount
+
     in_transit_total = 0
     in_transit_tags: list[int] = []
     counted_tags: set[int] = set()
-    for tag, post_roles in tag_to_post_roles.items():
+    channel_metadata_available = bool(channel_records or pending_transfers)
+    for tag in set(tag_to_post_roles) | set(tag_to_applied_roles):
         if tag in skipped_tags:
             continue
-        # In-transit: debit applied (CAUSE pre-snap, not in logs) but credit pending (EFFECT post-snap, in logs)
-        # This means EFFECT is in post_roles but CAUSE is not
-        if "EFFECT" in post_roles and "CAUSE" not in post_roles:
+        post_roles = tag_to_post_roles.get(tag, set())
+        applied_roles = tag_to_applied_roles.get(tag, set())
+
+        debit_in_cut = "CAUSE" in applied_roles and "CAUSE" not in post_roles
+        credit_in_cut = "EFFECT" in applied_roles and "EFFECT" not in post_roles
+        legacy_effect_only = (
+            not channel_metadata_available
+            and "EFFECT" in post_roles
+            and "CAUSE" not in post_roles
+        )
+
+        # In-transit: debit is in the cut, but credit is either post-cut or not
+        # applied yet. The legacy EFFECT-only path preserves old log-only tests.
+        if (debit_in_cut and not credit_in_cut) or legacy_effect_only:
             amount = tag_to_amount.get(tag, transfer_amounts.get(tag, 0))
             in_transit_total += amount
             in_transit_tags.append(tag)
             counted_tags.add(tag)
-
-    # Outbox-backed transfers are "credit not ACKed by the source", not proof
-    # that the destination did not apply the credit. Count them only to explain
-    # an observed deficit that remains after log-derived in-transit accounting.
-    pending_deficit = expected_total - balance_sum - in_transit_total
-    for tag, pending in sorted((pending_transfers or {}).items()):
-        if pending_deficit <= 0:
-            break
-        if tag in skipped_tags or tag in counted_tags:
-            continue
-        source_node_id = pending.get("source_node_id")
-        dest_node_id = pending.get("dest_node_id")
-        if participating_node_ids is not None and source_node_id not in participating_node_ids:
-            continue
-
-        post_roles = tag_to_post_roles.get(tag, set())
-        # Count only when the debit is in the snapshot. Log membership is the
-        # source of truth for this cut: if CAUSE is post-snapshot it appears in
-        # post_roles, otherwise the debit is part of the snapshot balance. The
-        # debit_ts only proves that the source debit happened at all; it is not
-        # reliable for ordering against the coordinator's snapshot timestamp
-        # because node/workload HLCs may already be ahead under network delay.
-        debit_ts = int(pending.get("debit_ts", 0))
-        if (
-            debit_ts <= 0
-            or "CAUSE" in post_roles
-            or "EFFECT" in post_roles
-        ):
-            continue
-
-        amount = int(pending.get("amount", tag_to_amount.get(tag, transfer_amounts.get(tag, 0))))
-        if amount <= 0:
-            continue
-        if amount > pending_deficit:
-            continue
-        in_transit_total += amount
-        in_transit_tags.append(tag)
-        counted_tags.add(tag)
-        pending_deficit -= amount
 
     post_role_samples = [
         f"tag={tag}:roles={','.join(sorted(post_roles))}:amount={tag_to_amount.get(tag, transfer_amounts.get(tag, 0))}"

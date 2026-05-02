@@ -26,6 +26,7 @@ class MockCoordinator:
     expected_total: int = 0
     transfer_amounts: dict = field(default_factory=dict)
     pending_transfer_records: dict = field(default_factory=dict)
+    channel_transfer_records: list[dict] = field(default_factory=list)
     _clock: int = 0
     _responses: dict[str, list[dict]] = field(default_factory=dict)
     _write_logs: list[list[dict]] = field(default_factory=list)

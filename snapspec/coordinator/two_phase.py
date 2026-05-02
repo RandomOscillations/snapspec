@@ -116,7 +116,10 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
     # Validate causal consistency
     validation_start = time.monotonic()
     causal_result, violations = validate_causal(
-        all_logs, participating_node_ids=set(responding_node_ids)
+        all_logs,
+        participating_node_ids=set(responding_node_ids),
+        channel_records=coordinator.channel_transfer_records,
+        pending_transfers=coordinator.pending_transfer_records,
     )
     causal_ok = causal_result == ValidationResult.CONSISTENT
     validation_ms = (time.monotonic() - validation_start) * 1000
@@ -140,6 +143,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                 participating_node_ids=set(responding_node_ids),
                 pending_transfers=coordinator.pending_transfer_records,
                 snapshot_ts=ts,
+                channel_records=coordinator.channel_transfer_records,
             )
             conservation_ok = cons.valid
             balance_sum = cons.balance_sum

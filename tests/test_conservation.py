@@ -22,6 +22,16 @@ def _entry(tag: int, role: str):
     }
 
 
+def _op(tag: int, role: str, node_id: int, partner: int, amount: int):
+    return {
+        "dependency_tag": tag,
+        "role": role,
+        "node_id": node_id,
+        "partner_node_id": partner,
+        "amount": amount,
+    }
+
+
 TOTAL = 1_000_000
 
 
@@ -236,6 +246,35 @@ class TestConservation:
             TOTAL,
             pending_transfers=pending,
             snapshot_ts=10,
+        )
+        assert result.valid
+        assert result.in_transit_total == 0
+
+    def test_channel_metadata_counts_debit_pre_credit_absent_in_transit(self):
+        balances = [499_000, 500_000]
+        result = validate_conservation(
+            balances,
+            [[], []],
+            {},
+            TOTAL,
+            channel_records=[
+                _op(tag=42, role="CAUSE", node_id=0, partner=1, amount=1000),
+            ],
+        )
+        assert result.valid
+        assert result.in_transit_total == 1000
+
+    def test_channel_metadata_does_not_count_post_cut_debit_without_credit(self):
+        balances = [500_000, 500_000]
+        logs = [[_entry(tag=42, role="CAUSE")], []]
+        result = validate_conservation(
+            balances,
+            logs,
+            {},
+            TOTAL,
+            channel_records=[
+                _op(tag=42, role="CAUSE", node_id=0, partner=1, amount=1000),
+            ],
         )
         assert result.valid
         assert result.in_transit_total == 0

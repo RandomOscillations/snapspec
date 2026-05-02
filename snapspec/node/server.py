@@ -624,7 +624,7 @@ class StorageNode:
             "write_timestamp": write_ts,
         }
 
-    def _write_log_payload_locked(self) -> tuple[list[dict], int, dict, dict]:
+    def _write_log_payload_locked(self) -> tuple[list[dict], int, dict, dict, list[dict]]:
         raw_log = self.block_store.get_write_log()
         entries = []
         for e in raw_log:
@@ -667,7 +667,11 @@ class StorageNode:
             amount = int(op.get("amount", 0) or 0)
             if tag > 0 and amount > 0:
                 transfer_amounts[tag] = amount
-        return entries, balance, transfer_amounts, pending_records
+        transfer_operations = [
+            {**op, "node_id": self.node_id}
+            for op in self._transfer_operations.values()
+        ]
+        return entries, balance, transfer_amounts, pending_records, transfer_operations
 
     def _record_transfer_operation_locked(
         self,
@@ -1056,7 +1060,7 @@ class StorageNode:
         ts = msg["logical_timestamp"]
 
         async with self._state_lock:
-            entries, balance, transfer_amounts, pending_records = (
+            entries, balance, transfer_amounts, pending_records, transfer_operations = (
                 self._write_log_payload_locked()
             )
 
@@ -1064,7 +1068,8 @@ class StorageNode:
                          entries=entries, balance=balance,
                          snapshot_balance=balance,
                          transfer_amounts=transfer_amounts,
-                         pending_transfer_records=pending_records)
+                         pending_transfer_records=pending_records,
+                         transfer_operations=transfer_operations)
 
     async def _handle_finalize_snapshot(self, msg: dict, writer: asyncio.StreamWriter):
         """Close the post-snapshot write window and return final logs."""
@@ -1082,7 +1087,7 @@ class StorageNode:
                 )
                 return
             self._writes_paused = True
-            entries, balance, transfer_amounts, pending_records = (
+            entries, balance, transfer_amounts, pending_records, transfer_operations = (
                 self._write_log_payload_locked()
             )
 
@@ -1090,7 +1095,8 @@ class StorageNode:
                          entries=entries, balance=balance,
                          snapshot_balance=balance,
                          transfer_amounts=transfer_amounts,
-                         pending_transfer_records=pending_records)
+                         pending_transfer_records=pending_records,
+                         transfer_operations=transfer_operations)
 
     async def _handle_reset(self, msg: dict, writer: asyncio.StreamWriter):
         """Reset node to initial state — used between strategy runs."""
