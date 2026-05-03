@@ -436,6 +436,21 @@ class MetricsCollector:
             in_transits = [s.in_transit_total for s in committed_snaps if s.in_transit_total is not None]
             summary["avg_balance_sum"] = sum(bal_sums) / len(bal_sums) if bal_sums else 0.0
             summary["avg_in_transit"] = sum(in_transits) / len(in_transits) if in_transits else 0.0
+            exact_audit_snaps = [
+                s for s in committed_snaps
+                if s.balance_sum is not None and s.in_transit_total is not None
+            ]
+            if exact_audit_snaps:
+                last_audit = exact_audit_snaps[-1]
+                summary["last_balance_sum"] = float(last_audit.balance_sum)
+                summary["last_in_transit_total"] = float(last_audit.in_transit_total)
+                summary["last_observed_total"] = float(
+                    last_audit.balance_sum + last_audit.in_transit_total
+                )
+            else:
+                summary["last_balance_sum"] = 0.0
+                summary["last_in_transit_total"] = 0.0
+                summary["last_observed_total"] = 0.0
 
             msg_counts = [s.message_count for s in committed_snaps if s.message_count is not None]
             if msg_counts:
@@ -469,6 +484,9 @@ class MetricsCollector:
             summary["avg_convergence_ms"] = 0.0
             summary["avg_balance_sum"] = 0.0
             summary["avg_in_transit"] = 0.0
+            summary["last_balance_sum"] = 0.0
+            summary["last_in_transit_total"] = 0.0
+            summary["last_observed_total"] = 0.0
             summary["avg_messages_per_snapshot"] = 0.0
             summary["total_control_messages"] = 0.0
             summary["avg_control_bytes_per_snapshot"] = 0.0

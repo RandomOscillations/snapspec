@@ -150,6 +150,34 @@ class TestComputeSummary:
         assert s["avg_dependency_tags_checked"] == pytest.approx(2.0)
         assert s["avg_control_bytes_per_snapshot"] == pytest.approx(1000.0)
 
+    def test_audit_summary_keeps_exact_latest_cut(self):
+        mc = _make_collector()
+        mc.on_snapshot_complete(
+            1, 100,
+            SnapshotResult(
+                success=True,
+                balance_sum=99_703,
+                in_transit_total=297,
+            ),
+            duration_ms=10.0,
+        )
+        mc.on_snapshot_complete(
+            2, 200,
+            SnapshotResult(
+                success=True,
+                balance_sum=98_662,
+                in_transit_total=1_338,
+            ),
+            duration_ms=10.0,
+        )
+
+        s = mc.compute_summary()
+        assert s["avg_balance_sum"] == pytest.approx(99_182.5)
+        assert s["avg_in_transit"] == pytest.approx(817.5)
+        assert s["last_balance_sum"] == pytest.approx(98_662)
+        assert s["last_in_transit_total"] == pytest.approx(1_338)
+        assert s["last_observed_total"] == pytest.approx(100_000)
+
 
 class TestCSVExport:
     def test_csv_columns(self):

@@ -551,12 +551,21 @@ def print_results_table(results: dict):
         ("avg_convergence_ms", "Avg convergence (ms)"),
         ("avg_balance_sum", "Avg balance sum"),
         ("avg_in_transit", "Avg in-transit tokens"),
+        ("last_balance_sum", "Latest balance sum"),
+        ("last_in_transit_total", "Latest in-transit tokens"),
+        ("last_observed_total", "Latest observed total"),
         ("avg_messages_per_snapshot", "Avg msgs/snapshot"),
         ("total_control_messages", "Total control msgs"),
     ]
 
     pct_keys = {"rate", "consistency", "validity", "verification"}
-    int_keys = {"avg_balance_sum", "avg_in_transit", "total_control_messages", "avg_messages_per_snapshot"}
+    int_keys = {
+        "last_balance_sum",
+        "last_in_transit_total",
+        "last_observed_total",
+        "total_control_messages",
+        "avg_messages_per_snapshot",
+    }
 
     col_w = 20
     header = f"{'Metric':<30}" + "".join(f"{s:>{col_w}}" for s in results)
@@ -847,8 +856,11 @@ async def run_node(config: dict, node_id: int, node_only: bool = False,
         for strategy in results:
             s = results[strategy]
             label = strategy.replace("_", " ").title().replace("And", "&")
-            bal = int(s.get("avg_balance_sum", 0))
-            transit = int(s.get("avg_in_transit", 0))
+            bal = int(s.get("last_balance_sum", s.get("avg_balance_sum", 0)))
+            transit = int(
+                s.get("last_in_transit_total", s.get("avg_in_transit", 0))
+            )
+            observed = int(s.get("last_observed_total", bal + transit))
             expected = int(wl_cfg.get("total_tokens", 0))
             conv = s.get("avg_convergence_ms", 0)
             msgs = int(s.get("avg_messages_per_snapshot", 0))
@@ -858,7 +870,7 @@ async def run_node(config: dict, node_id: int, node_only: bool = False,
             print(f"    [{label}]")
             print(f"      Causal consistency:   {fmt_pct(causal)}")
             print(f"      Conservation:         {fmt_pct(conservation)}")
-            print(f"      Audit sum:            {bal} + {transit} (in-transit) = {bal + transit} (expected: {expected})")
+            print(f"      Latest audit sum:     {bal} + {transit} (in-transit) = {observed} (expected: {expected})")
             print(f"      Convergence time:     {fmt_float(conv, ' ms')}")
             print(f"      Messages/snapshot:    {msgs}")
             print(f"      Total control msgs:   {total_msgs}")
