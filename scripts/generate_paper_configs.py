@@ -56,6 +56,10 @@ def config_from_base(
     cross_ratio: float,
     total_blocks: int,
     block_size: int,
+    strategies: str = "all",
+    effect_delay_ms: float = 0.0,
+    snapshot_transfer_policy: str = "drain",
+    speculative_snap_stagger_ms: float = 0.0,
 ) -> dict:
     cfg = copy.deepcopy(base)
     cfg["block_store"] = block_store
@@ -65,13 +69,19 @@ def config_from_base(
     workload["cross_node_ratio"] = cross_ratio
     workload["block_size"] = block_size
     workload["total_blocks"] = total_blocks
+    workload["effect_delay_ms"] = effect_delay_ms
 
     experiment = cfg.setdefault("experiment", {})
     experiment["duration_s"] = duration_s
     experiment["baseline_duration_s"] = duration_s
     experiment["snapshot_interval_s"] = interval_s
-    experiment["strategies"] = "all"
+    experiment["strategies"] = strategies
     experiment["collect_baseline"] = True
+    experiment["snapshot_transfer_policy"] = snapshot_transfer_policy
+    experiment["speculative_snap_stagger_ms"] = speculative_snap_stagger_ms
+    experiment["speculative_retry_backoff_ms"] = 1
+    experiment["speculative_retry_backoff_max_ms"] = 10
+    experiment["speculative_early_fallback"] = True
     experiment["output_dir"] = f"{results_root}/{name}/rep{rep}"
 
     return cfg
@@ -91,6 +101,10 @@ def add_case(
     cross_ratio: float = 0.2,
     total_blocks: int = 256,
     block_size: int = 4096,
+    strategies: str = "all",
+    effect_delay_ms: float = 0.0,
+    snapshot_transfer_policy: str = "drain",
+    speculative_snap_stagger_ms: float = 0.0,
 ) -> None:
     for rep in range(1, reps + 1):
         cfg = config_from_base(
@@ -105,6 +119,10 @@ def add_case(
             cross_ratio=cross_ratio,
             total_blocks=total_blocks,
             block_size=block_size,
+            strategies=strategies,
+            effect_delay_ms=effect_delay_ms,
+            snapshot_transfer_policy=snapshot_transfer_policy,
+            speculative_snap_stagger_ms=speculative_snap_stagger_ms,
         )
         cases.append((f"{name}_rep{rep}.yaml", cfg))
 
@@ -150,6 +168,8 @@ def runbook_text(config_paths: list[Path]) -> str:
             "- If making the speculative correctness claim, inspect",
             "  `avg_dependency_tags_checked` and `avg_retry_rate`; both being zero",
             "  means the run is only an overhead/correctness sanity run.",
+            "- The `row_retry_conflict_*` config is the explicit retry-path run;",
+            "  expect nonzero `avg_retry_rate` with conservation and recovery still at 100%.",
             "",
         ]
     )
@@ -221,6 +241,27 @@ def main() -> int:
             write_rate=rate,
             cross_ratio=0.2,
         )
+
+    # Conflict-rich retry workload: this is the explicit speculative-retry
+    # evaluation point. It intentionally keeps transfers in flight and staggers
+    # local snapshots so invalid cuts and retry/fallback costs are observable.
+    add_case(
+        cases,
+        base,
+        name="row_retry_conflict_r950_i0500",
+        results_root=args.results,
+        reps=reps,
+        duration_s=duration,
+        interval_s=0.5,
+        write_rate=100,
+        cross_ratio=0.95,
+        total_blocks=32,
+        block_size=64,
+        strategies="speculative",
+        effect_delay_ms=20,
+        snapshot_transfer_policy="speculate",
+        speculative_snap_stagger_ms=35,
+    )
 
     # Optional storage sensitivity. ROW is the main distributed claim; COW and
     # FullCopy should also be covered by microbenchmarks.
