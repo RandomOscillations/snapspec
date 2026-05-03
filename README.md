@@ -1,145 +1,191 @@
 # SnapSpec
 
-SnapSpec investigates how near-free local snapshot creation via Redirect-on-Write (ROW) changes the design space for distributed snapshot coordination. Traditional snapshot mechanisms (Copy-on-Write, full-copy) impose significant I/O costs that force conservative coordination protocols. ROW eliminates this cost — snapshots are O(1), writes during snapshots are 1 I/O (vs 3 for COW), and discards are O(delta). This makes speculative (optimistic) coordination viable: snap first, validate later, retry cheaply if inconsistent.
+Author: Adithya Srinivasan
 
-The system evaluates five configurations across three storage backends and three coordination strategies to identify the crossover point where speculative coordination's retry overhead exceeds two-phase coordination's pause cost.
+SnapSpec is a distributed snapshot research prototype. The project asks how cheap
+local snapshots, especially Redirect-on-Write snapshots, affect distributed
+checkpoint coordination. The codebase contains storage backends, storage nodes,
+a coordinator, three snapshot protocols, workload generators, validation logic,
+Docker deployment files, and experiment scripts.
 
-## Coordination Strategies
+The main demo path is `launch.py`: three storage nodes run a token-transfer
+workload, node 0 coordinates snapshots, and the system reports correctness and
+performance metrics for pause-and-snap, two-phase, and speculative protocols.
 
-| Strategy | How it works | Throughput impact |
-|----------|-------------|-------------------|
-| **Pause-and-Snap** | Pause all writes → snapshot → commit → resume | Writes blocked for ~4 RTTs |
-| **Two-Phase** | Prepare (snapshot, writes continue to delta) → validate → commit/abort | Brief pause at commit only |
-| **Speculative** | Snapshot instantly, validate, retry if inconsistent, fallback to two-phase after max retries | Writes never pause |
+## What Was Built
 
-## Five Experimental Configurations
+The commit history shows the project evolving in these stages:
 
-| Config | Backend | Strategy | Isolates |
-|--------|---------|----------|----------|
-| 1 | Full-Copy | Pause-and-Snap | Worst-case baseline |
-| 2 | COW | Pause-and-Snap | Current state of practice |
-| 3 | ROW | Pause-and-Snap | Benefit of ROW alone |
-| 4 | ROW | Two-Phase | ROW + standard coordination |
-| 5 | ROW | Speculative | ROW + optimistic coordination |
+- C++ block stores: ROW, COW, and Full-Copy implementations with pybind11
+  bindings.
+- Python distributed runtime: TCP protocol, persistent node connections,
+  storage-node server, and coordinator.
+- Snapshot strategies: pause-and-snap, two-phase, speculative, and an adaptive
+  strategy shell.
+- Correctness validation: causal dependency validation and token conservation.
+- Workloads and metrics: token-transfer workload, node-local workload mode,
+  CSV metrics, latency/throughput/retry/restore reporting.
+- Recovery support: snapshot archive verification, cluster launcher recovery,
+  and durable outbox metadata for pending cross-node transfer effects.
+- Deployment and experiments: Docker, MySQL-backed experiments, remote VM
+  helpers, generated paper configs, and plotting scripts.
 
-Configs 1-3 isolate the snapshot mechanism. Configs 3-5 isolate the coordination strategy.
+## Repository Map
 
-## Tech Stack
+| Path | Purpose |
+| --- | --- |
+| `src/` | C++ block-store implementations and pybind11 bindings. |
+| `snapspec/` | Python package for coordinator, nodes, network, workloads, validation, metrics, metadata, MySQL, and SmallBank code. |
+| `tests/` | Python unit and integration tests. |
+| `experiments/` | Experiment harnesses, config files, plotting, sweeps, and MySQL verification. |
+| `docker/` | Dockerfiles and compose files for local distributed runs and MySQL deployments. |
+| `demo_remote/` | Remote demo node/client helpers. |
+| `scripts/` | Paper-run config generation and plotting utilities. |
+| `paper_runs/` | Generated three-machine paper configs. |
+| `results/` | Checked-in CSV result data from prior runs. |
+| `launch.py` | Main three-node launcher and demo entrypoint. |
+| `cluster.yaml` | Three-machine config. Edit IPs before running on real machines. |
+| `cluster_local.yaml` | Local multi-node config. |
 
-- **C++17** — Block stores (ROW, COW, Full-Copy) for performance-critical storage
-- **pybind11** — C++ to Python bindings
-- **Python 3.10+** — Coordinator, storage nodes, network layer, workload, experiments
-- **Docker + tc netem** — Network simulation for paper experiments
-- **CMake** — C++ build system
-- **pytest / Google Test** — Test suites
+## Requirements
 
-## Project Structure
+- Python 3.10+
+- CMake
+- C++17 compiler
+- Docker Desktop, if using Docker runs
+- Python packages from `requirements.txt`
 
-```
-snapspec/
-├── src/
-│   ├── blockstore/
-│   │   ├── base.hpp            # Abstract block store interface
-│   │   ├── row.hpp / row.cpp   # Redirect-on-Write (O(1) snapshot)
-│   │   ├── cow.hpp / cow.cpp   # Copy-on-Write (3 I/O per write)
-│   │   └── fullcopy.hpp/cpp    # Full-Copy (O(n) snapshot)
-│   ├── bindings.cpp            # pybind11 bindings
-│   └── tests/                  # Google Test suites
-├── snapspec/                   # Python package
-│   ├── network/
-│   │   ├── protocol.py         # Length-prefixed JSON over TCP
-│   │   └── connection.py       # Persistent TCP with TCP_NODELAY
-│   ├── coordinator/
-│   │   ├── coordinator.py      # Coordinator (snapshot loop, broadcast, log collection)
-│   │   ├── strategy_interface.py  # CoordinatorProtocol + SnapshotResult
-│   │   ├── pause_and_snap.py   # Pause-and-snap strategy
-│   │   ├── two_phase.py        # Two-phase strategy
-│   │   └── speculative.py      # Speculative with retry + two-phase fallback
-│   ├── node/
-│   │   └── server.py           # Storage node server + state machine
-│   └── validation/
-│       ├── causal.py           # Causal dependency validation
-│       └── conservation.py     # Token conservation invariant
-├── tests/                      # Python test suites
-├── experiments/                # Experiment configs, harness, plotting
-└── docker/                     # Dockerfile + docker-compose for netem
-```
-
-## Quick Start
-
-### Build C++ Block Stores
+Install Python dependencies:
 
 ```bash
-cmake -B build -S . && cmake --build build
+python -m pip install -r requirements.txt
 ```
 
-### Run Tests
+Build the C++ block-store module:
 
 ```bash
-# C++ tests
-cd build && ctest
+cmake -B build -S .
+cmake --build build
+```
 
-# Python tests (59 tests, no C++ build required — uses MockBlockStore)
+## Run Tests
+
+Run C++ tests:
+
+```bash
+ctest --test-dir build
+```
+
+Run Python tests:
+
+```bash
 pytest tests/
 ```
 
-### Run an Experiment
+## Run a Single-Process Experiment
+
+This path is useful for quick development checks.
 
 ```bash
-python experiments/run_experiment.py --config experiments/configs/exp1_frequency.yaml
+python experiments/run_experiment.py --config experiments/configs/row.yaml
 ```
 
-### Run Microbenchmarks
+Other configs are in `experiments/configs/`.
+
+## Run the Main Three-Machine Demo
+
+1. Edit `cluster.yaml` and set the `host` field for nodes 0, 1, and 2.
+2. On node 1, run:
 
 ```bash
-python experiments/run_microbenchmarks.py --output results/microbenchmarks.csv
+PYTHONUNBUFFERED=1 python launch.py --id 1 --config cluster.yaml --node-only
 ```
 
-## Key Experiments
+3. On node 2, run:
 
-**Experiment 1 — Snapshot Frequency Sweep:** Varies snapshot interval (1s–60s) across all 5 configs. Shows ROW maintaining throughput at high frequencies while COW/full-copy degrade.
+```bash
+PYTHONUNBUFFERED=1 python launch.py --id 2 --config cluster.yaml --node-only
+```
 
-**Experiment 2 — Node Scaling:** Varies node count (3–7) across ROW configs. Measures snapshot latency and coordination overhead per strategy.
+4. On node 0, run:
 
-**Experiment 3 — Dependency Ratio Sweep (the money experiment):** Varies cross-node dependency ratio (0%–50%) for two-phase vs speculative. Produces the crossover graph — the point where speculative's retry-adjusted throughput drops below two-phase's steady throughput.
+```bash
+PYTHONUNBUFFERED=1 python launch.py --id 0 --config cluster.yaml
+```
 
-## Consistency Model
+Node 0 waits for all nodes, resets balances, starts the workload, runs the
+configured strategies, prints correctness/performance results, and writes CSVs
+under the configured `experiment.output_dir`.
 
-Snapshots are validated using two checks:
+Useful overrides:
 
-1. **Causal dependency validation** — for each cross-node transfer, either both halves are captured or neither is. Asymmetry (debit without credit or vice versa) is inconsistent.
-2. **Token conservation** — sum of all node balances plus in-transit tokens equals a known constant.
+```bash
+python launch.py --id 0 --config cluster.yaml --strategy pause_and_snap
+python launch.py --id 0 --config cluster.yaml --strategy two_phase --duration 30
+python launch.py --id 0 --config cluster.yaml --strategy speculative --duration 30
+```
 
-Write log semantics: entries in the log = writes that happened *after* the snapshot (NOT in the snapshot).
+## Run Recovery Demo
 
-## Design Invariants
+After a committed snapshot exists, restart a failed node with:
 
-- At most one pending snapshot per node at any time
-- Token conservation holds at all times (sum of balances + in-transit = constant)
-- Causal completeness (both cause and effect captured, or neither)
-- Write logs bounded by logical timestamp from coordinator
-- Debit acknowledged before credit sent (never parallelized)
+```bash
+PYTHONUNBUFFERED=1 python launch.py --id 1 --config cluster.yaml --recover --node-only
+```
 
-## Failure Mode Mitigations
+The recovery path restores from the latest committed snapshot archive available
+to that node/cluster configuration.
 
-| FM | Risk | Mitigation |
-|----|------|------------|
-| FM1 | Write/snapshot race | asyncio.Lock serializes write and snapshot creation |
-| FM2 | Message reordering | Per-node state machine rejects invalid transitions |
-| FM3 | Credit before debit ack | Workload generator enforces sequential debit-then-credit |
-| FM4 | Unbounded write log | Bounded by logical timestamp T from coordinator |
-| FM5 | Delta growth under retries | Fallback to two-phase when delta > threshold_frac * total_blocks |
-| FM6 | Concurrent balance updates | Protected by state lock on each node |
-| FM7 | Coordinator crash | Out of scope (single coordinator assumed reliable) |
+## Run with Docker
 
-## Extensions
+The quickest Docker launch uses `docker/docker-compose.launch.yml`:
 
-1. **Analytical Model** — Poisson approximation: P(consistent) ≈ e^(−λ·f·d·Δt). Predicts crossover point mathematically.
-2. **Adaptive Protocol Switching** — Coordinator dynamically switches between speculative and two-phase based on observed retry rates.
-3. **Opportunistic Snapshot Timing** — Wait for quiet moments in cross-node write traffic before snapping.
-4. **Fault Injection** — Straggler node experiments via per-container tc netem delays.
-5. **Partial-Node Speculative** — Only validate dependency cliques, commit non-clique nodes immediately.
+```bash
+docker compose -f docker/docker-compose.launch.yml up --build --abort-on-container-exit --exit-code-from node0
+```
 
-## License
+This starts three containers, runs node 0 as coordinator, and writes results to
+the mounted `results/` directory.
 
-[MIT](LICENSE)
+For MySQL-backed experiments, use the MySQL compose file:
+
+```bash
+docker compose -f docker/docker-compose.mysql.yml up --build
+```
+
+## Generate Paper Configs
+
+Generate a set of three-machine configs:
+
+```bash
+python scripts/generate_paper_configs.py --base cluster.yaml --out paper_runs/configs --results results/paper --short --reps 1
+```
+
+Run each generated config by passing it to `launch.py` on all three machines.
+
+## Generate Plots
+
+```bash
+python scripts/plot_paper_results.py
+```
+
+The plotting scripts read existing CSV files under `results/` or
+`results/paper/` and create presentation/report figures.
+
+## Output Files
+
+Common output files:
+
+- `cluster_<strategy>.csv`: one-row metric summary per strategy.
+- `cluster_<strategy>_snapshots.csv`: per-snapshot detail.
+- `cluster_<strategy>_samples.csv`: periodic workload samples.
+- `results/paper/...`: checked-in paper/demo result CSVs.
+
+## Notes
+
+- Write-log entries mean writes that happened after a local snapshot. Those
+  writes are not part of that snapshot.
+- The token invariant is `sum(node balances) + in-transit tokens = total tokens`.
+- `row` is the main storage backend for the project claim; `cow` and `fullcopy`
+  are comparison backends.
+- `launch.py` is the main project entrypoint for demos and three-machine runs.
