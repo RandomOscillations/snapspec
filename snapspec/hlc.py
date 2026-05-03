@@ -1,12 +1,9 @@
 """
+[Youbin]
 Hybrid Logical Clock (HLC).
 
 Combines physical wall-clock time with a logical counter to provide
-causally ordered timestamps that stay close to real time. Based on
-Kulkarni & Demirbas 2014 ("Logical Physical Clocks and Consistent
-Snapshots in Globally Distributed Databases").
-
-Used by CockroachDB, MongoDB, YugabyteDB.
+causally ordered timestamps that stay close to real time.
 
 Packing: a single 64-bit integer = (physical_ms << 16) | counter.
   - 48 bits for milliseconds since epoch (~8900 years)
