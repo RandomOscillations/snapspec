@@ -244,6 +244,9 @@ class StorageNode:
         # Archive metadata: maps archive_path -> snapshot-time balance
         self._archive_balances: dict[str, int] = {}
         self._global_snapshot_manifests: dict[str, dict[str, Any]] = {}
+        self._recovered_snapshot_manifest: dict[str, Any] | None = None
+        self._recovered_channel_records: list[dict[str, Any]] = []
+        self._recovered_pending_transfers: dict[str, dict[str, Any]] = {}
         self._restore_prepared_snapshot_ts: int | None = None
         self._restore_prepared_archive_path: str | None = None
 
@@ -395,6 +398,23 @@ class StorageNode:
                 for key, value in manifests.items()
                 if isinstance(value, dict)
             }
+        recovered_manifest = state.get("recovered_snapshot_manifest")
+        if isinstance(recovered_manifest, dict):
+            self._recovered_snapshot_manifest = dict(recovered_manifest)
+        recovered_channels = state.get("recovered_channel_records", [])
+        if isinstance(recovered_channels, list):
+            self._recovered_channel_records = [
+                dict(record)
+                for record in recovered_channels
+                if isinstance(record, dict)
+            ]
+        recovered_pending = state.get("recovered_pending_transfers", {})
+        if isinstance(recovered_pending, dict):
+            self._recovered_pending_transfers = {
+                str(tag): dict(record)
+                for tag, record in recovered_pending.items()
+                if isinstance(record, dict)
+            }
 
         # Restore block data from latest archive if available
         latest_archive = state.get("latest_archive_path")
@@ -480,6 +500,9 @@ class StorageNode:
             "applied_write_acks": self._applied_write_acks,
             "transfer_operations": self._transfer_operations,
             "global_snapshot_manifests": self._global_snapshot_manifests,
+            "recovered_snapshot_manifest": self._recovered_snapshot_manifest,
+            "recovered_channel_records": self._recovered_channel_records,
+            "recovered_pending_transfers": self._recovered_pending_transfers,
         }
         tmp_path = f"{self._state_path}.tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
@@ -495,6 +518,85 @@ class StorageNode:
             except (ValueError, IndexError):
                 continue
         return latest_ts or None
+
+    def _install_recovery_manifest_locked(self, snapshot_ts: int) -> None:
+        """Make the restored global-cut channel state explicit and durable."""
+        manifest = self._global_snapshot_manifests.get(str(snapshot_ts))
+        if not isinstance(manifest, dict):
+            manifest = {
+                "snapshot_ts": int(snapshot_ts),
+                "node_id": self.node_id,
+                "balance": self._balance,
+                "committed": False,
+                "in_transit_total": 0,
+            }
+
+        self._recovered_snapshot_manifest = dict(manifest)
+        self._recovered_channel_records = [
+            dict(record)
+            for record in manifest.get("channel_records", []) or []
+            if isinstance(record, dict)
+        ]
+        pending = manifest.get("pending_transfers", {}) or {}
+        self._recovered_pending_transfers = {
+            str(tag): dict(record)
+            for tag, record in pending.items()
+            if isinstance(record, dict)
+        }
+
+    def _clear_recovery_state_locked(self) -> None:
+        self._recovered_snapshot_manifest = None
+        self._recovered_channel_records = []
+        self._recovered_pending_transfers = {}
+
+    @staticmethod
+    def _record_node_id(record: dict[str, Any], *keys: str) -> int | None:
+        for key in keys:
+            value = record.get(key)
+            if value is not None:
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    def _recovery_summary_locked(self) -> dict[str, Any]:
+        manifest = self._recovered_snapshot_manifest or {}
+        outgoing_total = 0
+        incoming_total = 0
+        outgoing_tags: list[int] = []
+        incoming_tags: list[int] = []
+
+        for raw_tag, record in self._recovered_pending_transfers.items():
+            source = self._record_node_id(record, "source_node_id", "source")
+            dest = self._record_node_id(record, "dest_node_id", "dest")
+            amount = int(record.get("amount", 0) or 0)
+            try:
+                tag = int(raw_tag)
+            except (TypeError, ValueError):
+                tag = int(record.get("dependency_tag", 0) or 0)
+            if source == self.node_id:
+                outgoing_total += amount
+                outgoing_tags.append(tag)
+            if dest == self.node_id:
+                incoming_total += amount
+                incoming_tags.append(tag)
+
+        return {
+            "recovered_snapshot_ts": int(manifest.get("snapshot_ts", 0) or 0),
+            "recovery_balance_sum": int(manifest.get("balance_sum", 0) or 0),
+            "recovery_in_transit_total": int(
+                manifest.get("in_transit_total", 0) or 0
+            ),
+            "recovery_pending_transfer_count": len(
+                self._recovered_pending_transfers
+            ),
+            "recovery_channel_record_count": len(self._recovered_channel_records),
+            "recovery_pending_outgoing_total": outgoing_total,
+            "recovery_pending_incoming_total": incoming_total,
+            "recovery_pending_outgoing_tags": sorted(outgoing_tags),
+            "recovery_pending_incoming_tags": sorted(incoming_tags),
+        }
 
     async def _handle_connection(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -960,12 +1062,15 @@ class StorageNode:
         workload_running = False
         workload_registered = self._local_workload is not None
         workload_metrics = {}
+        recovery_summary = {}
         if self._local_workload is not None:
             workload_writes = int(getattr(self._local_workload, "writes_completed", 0))
             pending_transfers = len(getattr(self._local_workload, "_pending_effects", {}))
             workload_running = bool(getattr(self._local_workload, "_running", False))
             workload_metrics = dict(getattr(self._local_workload, "metrics_snapshot", {}))
             workload_metrics.pop("writes_completed", None)
+        async with self._state_lock:
+            recovery_summary = self._recovery_summary_locked()
         await self._send(
             writer,
             MessageType.WORKLOAD_STATS,
@@ -976,6 +1081,7 @@ class StorageNode:
             workload_registered=workload_registered,
             node_balance=self._balance,
             total_writes=self.total_writes,
+            **recovery_summary,
             **workload_metrics,
         )
 
@@ -1137,6 +1243,7 @@ class StorageNode:
             self._applied_write_acks = {}
             self._transfer_operations = {}
             self._global_snapshot_manifests = {}
+            self._clear_recovery_state_locked()
             self._workload_epoch += 1
             self._persist_runtime_state()
 
@@ -1305,6 +1412,7 @@ class StorageNode:
                 self._snapshot_ground_truth = {}
                 self._applied_write_acks = {}
                 self._transfer_operations = {}
+                self._install_recovery_manifest_locked(int(snapshot_ts))
                 self._persist_runtime_state()
                 restored = True
 
@@ -1416,6 +1524,7 @@ class StorageNode:
             self._transfer_operations = {}
             self._restore_prepared_snapshot_ts = None
             self._restore_prepared_archive_path = None
+            self._install_recovery_manifest_locked(int(snapshot_ts))
             self._persist_runtime_state()
 
         if self._local_workload is not None:

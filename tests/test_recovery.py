@@ -825,6 +825,130 @@ class TestSnapshotRestoreVerification:
                 await node.stop()
 
     @pytest.mark.asyncio
+    async def test_global_restore_exposes_recovered_channel_state(self):
+        stores = [
+            MockBlockStore(block_size=64, total_blocks=4),
+            MockBlockStore(block_size=64, total_blocks=4),
+        ]
+        nodes = [
+            await _start_node(stores[0], node_id=0, initial_balance=400),
+            await _start_node(stores[1], node_id=1, initial_balance=500),
+        ]
+        conns = []
+        restarted = None
+        try:
+            conns = [await _connect(node) for node in nodes]
+            snapshot_ts = 1100
+            for conn in conns:
+                snap = await conn.send_and_receive(
+                    MessageType.SNAP_NOW,
+                    1,
+                    snapshot_ts=snapshot_ts,
+                )
+                assert snap["type"] == MessageType.SNAPPED.value
+                commit = await conn.send_and_receive(MessageType.COMMIT, 2)
+                assert commit["type"] == MessageType.ACK.value
+
+            pending_transfers = {
+                "77": {
+                    "source_node_id": 0,
+                    "dest_node_id": 1,
+                    "amount": 100,
+                    "debit_ts": 10,
+                    "transfer_state": "DEBIT_APPLIED",
+                }
+            }
+            channel_records = [
+                {
+                    "dependency_tag": 77,
+                    "role": "CAUSE",
+                    "source_node_id": 0,
+                    "dest_node_id": 1,
+                    "amount": 100,
+                }
+            ]
+            for conn in conns:
+                mark = await conn.send_and_receive(
+                    MessageType.MARK_SNAPSHOT_COMMITTED,
+                    3,
+                    snapshot_ts=snapshot_ts,
+                    participants=[0, 1],
+                    strategy="speculative",
+                    expected_total=1000,
+                    balance_sum=900,
+                    in_transit_total=100,
+                    pending_transfers=pending_transfers,
+                    channel_records=channel_records,
+                )
+                assert mark["type"] == MessageType.ACK.value
+
+            for conn in conns:
+                prepared = await conn.send_and_receive(
+                    MessageType.RESTORE_PREPARE,
+                    4,
+                    snapshot_ts=snapshot_ts,
+                )
+                assert prepared["type"] == MessageType.ACK.value
+            for conn in conns:
+                restored = await conn.send_and_receive(
+                    MessageType.RESTORE_COMMIT,
+                    5,
+                    snapshot_ts=snapshot_ts,
+                )
+                assert restored["type"] == MessageType.SNAPSHOT_RESTORED.value
+
+            source_stats = await conns[0].send_and_receive(
+                MessageType.GET_WORKLOAD_STATS,
+                6,
+            )
+            dest_stats = await conns[1].send_and_receive(
+                MessageType.GET_WORKLOAD_STATS,
+                6,
+            )
+            assert source_stats["recovered_snapshot_ts"] == snapshot_ts
+            assert source_stats["recovery_in_transit_total"] == 100
+            assert source_stats["recovery_pending_outgoing_total"] == 100
+            assert source_stats["recovery_pending_incoming_total"] == 0
+            assert source_stats["recovery_pending_outgoing_tags"] == [77]
+            assert dest_stats["recovery_pending_outgoing_total"] == 0
+            assert dest_stats["recovery_pending_incoming_total"] == 100
+            assert dest_stats["recovery_pending_incoming_tags"] == [77]
+
+            await conns[0].close()
+            conns[0] = None
+            archive_dir = nodes[0].archive_dir
+            await nodes[0].stop()
+            nodes[0] = None
+
+            restarted = await _start_node(
+                stores[0],
+                node_id=0,
+                initial_balance=0,
+                archive_dir=archive_dir,
+            )
+            restart_conn = await _connect(restarted)
+            try:
+                persisted = await restart_conn.send_and_receive(
+                    MessageType.GET_WORKLOAD_STATS,
+                    7,
+                )
+                assert persisted["recovered_snapshot_ts"] == snapshot_ts
+                assert persisted["recovery_in_transit_total"] == 100
+                assert persisted["recovery_pending_outgoing_total"] == 100
+                assert persisted["recovery_pending_outgoing_tags"] == [77]
+            finally:
+                await restart_conn.close()
+        finally:
+            for conn in conns:
+                if conn is not None:
+                    await conn.close()
+            for node in nodes:
+                if node is not None:
+                    await node.stop()
+            if restarted is not None:
+                await restarted.stop()
+
+    @pytest.mark.asyncio
     async def test_latest_global_snapshot_requires_every_node_manifest(self):
         nodes = [
             await _start_node(
