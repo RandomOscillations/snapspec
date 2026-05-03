@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -467,6 +468,39 @@ class StorageNode:
             return True
         get_archived_blocks = getattr(self.block_store, "get_archived_blocks", None)
         return callable(get_archived_blocks) and get_archived_blocks(archive_path) is not None
+
+    def _archive_digest_locked(self, archive_path: str) -> tuple[str | None, int | None]:
+        """Return a stable checksum for the committed local archive.
+
+        File-backed C++ block stores hash the archive file. The test/mock store
+        hashes a canonical serialization of archived blocks so global manifests
+        can still validate archive identity in unit tests.
+        """
+        if os.path.isfile(archive_path):
+            digest = hashlib.sha256()
+            total = 0
+            with open(archive_path, "rb") as f:
+                while True:
+                    chunk = f.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+                    total += len(chunk)
+            return digest.hexdigest(), total
+
+        get_archived_blocks = getattr(self.block_store, "get_archived_blocks", None)
+        archived = get_archived_blocks(archive_path) if callable(get_archived_blocks) else None
+        if archived is None:
+            return None, None
+
+        digest = hashlib.sha256()
+        total = 0
+        for block_id, data in sorted(archived.items()):
+            digest.update(int(block_id).to_bytes(8, "big", signed=False))
+            digest.update(len(data).to_bytes(8, "big", signed=False))
+            digest.update(data)
+            total += len(data)
+        return digest.hexdigest(), total
 
     def _persist_runtime_state(self):
         """Persist the mutable token/accounting state needed after restart."""
@@ -1572,11 +1606,14 @@ class StorageNode:
                     writer, msg, f"No archived balance recorded for {archive_path}"
                 )
                 return
+            archive_checksum, archive_bytes = self._archive_digest_locked(archive_path)
 
             manifest = {
                 "snapshot_ts": int(snapshot_ts),
                 "node_id": self.node_id,
                 "archive_path": archive_path,
+                "archive_checksum": archive_checksum,
+                "archive_bytes": archive_bytes,
                 "balance": int(self._archive_balances[archive_path]),
                 "balance_sum": int(msg.get("balance_sum", 0) or 0),
                 "in_transit_total": int(msg.get("in_transit_total", 0) or 0),
@@ -1600,7 +1637,13 @@ class StorageNode:
             participants=manifest["participants"],
             archive=archive_path,
         )
-        await self._send(writer, MessageType.ACK, ts, snapshot_ts=snapshot_ts)
+        await self._send(
+            writer,
+            MessageType.ACK,
+            ts,
+            snapshot_ts=snapshot_ts,
+            manifest=manifest,
+        )
 
     async def _handle_get_snapshot_manifests(
         self, msg: dict, writer: asyncio.StreamWriter

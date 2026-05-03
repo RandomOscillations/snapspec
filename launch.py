@@ -259,13 +259,12 @@ async def latest_global_committed_snapshot_ts(
         for cfg in node_configs
     ])
     expected_nodes = {int(cfg["node_id"]) for cfg in node_configs}
-    per_node_ts: list[set[int]] = []
+    manifests_by_ts: dict[int, dict[int, dict]] = {}
 
     for cfg, resp in zip(node_configs, responses):
         if resp is None or resp.get("type") != MessageType.SNAPSHOT_MANIFESTS.value:
             print(f"  Snapshot manifest query failed on node {cfg['node_id']}: {resp}")
             return None
-        node_ts: set[int] = set()
         for manifest in resp.get("manifests", []):
             if not manifest.get("committed", False):
                 continue
@@ -273,15 +272,49 @@ async def latest_global_committed_snapshot_ts(
             if participants != expected_nodes:
                 continue
             try:
-                node_ts.add(int(manifest["snapshot_ts"]))
+                snapshot_ts = int(manifest["snapshot_ts"])
+                node_id = int(manifest["node_id"])
             except (KeyError, TypeError, ValueError):
                 continue
-        per_node_ts.append(node_ts)
+            manifests_by_ts.setdefault(snapshot_ts, {})[node_id] = manifest
 
-    if not per_node_ts:
-        return None
-    common = set.intersection(*per_node_ts)
-    return max(common) if common else None
+    for snapshot_ts in sorted(manifests_by_ts, reverse=True):
+        node_manifests = manifests_by_ts[snapshot_ts]
+        if set(node_manifests) != expected_nodes:
+            continue
+        if _global_manifest_consistent(list(node_manifests.values())):
+            return snapshot_ts
+    return None
+
+
+def _global_manifest_consistent(manifests: list[dict]) -> bool:
+    if not manifests:
+        return False
+    fields = (
+        "snapshot_ts",
+        "participants",
+        "strategy",
+        "expected_total",
+        "balance_sum",
+        "in_transit_total",
+    )
+    reference = {
+        field: _canonical_manifest_value(manifests[0].get(field))
+        for field in fields
+    }
+    return all(
+        {
+            field: _canonical_manifest_value(manifest.get(field))
+            for field in fields
+        } == reference
+        for manifest in manifests[1:]
+    )
+
+
+def _canonical_manifest_value(value):
+    if isinstance(value, list):
+        return tuple(int(item) for item in value)
+    return value
 
 
 async def _resume_nodes_after_restore(node_configs: list[dict]) -> None:
@@ -439,6 +472,7 @@ async def run_strategy(
             )
         ),
         speculative_early_fallback=bool(exp_cfg.get("speculative_early_fallback", True)),
+        global_manifest_dir=str(exp_cfg.get("output_dir", "results")),
         health_check_interval_s=1.0,
         health_check_timeout_s=0.5,
         health_unhealthy_after_s=3.0,

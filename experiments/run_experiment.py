@@ -331,6 +331,7 @@ async def run_single(config: dict, rep: int, output_dir: str) -> str:
             speculative_early_fallback=bool(
                 config.get("speculative_early_fallback", True)
             ),
+            global_manifest_dir=output_dir,
             metadata_registry=build_metadata_registry(config, rep, output_dir),
         )
         coordinator.expected_total = total_tokens

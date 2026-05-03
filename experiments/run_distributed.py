@@ -228,6 +228,7 @@ async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> tu
             cfg.get("speculative_retry_backoff_max_s", 0.0)
         ),
         speculative_early_fallback=bool(cfg.get("speculative_early_fallback", True)),
+        global_manifest_dir=os.environ.get("SNAPSPEC_OUTPUT_DIR", "results"),
         metadata_registry=build_metadata_registry(cfg, strategy_name),
     )
     await coordinator.start()

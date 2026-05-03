@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import Any, Callable
 
@@ -28,6 +29,13 @@ from ..network.connection import NodeConnection
 from .strategy_interface import SnapshotResult
 
 logger = logging.getLogger(__name__)
+
+
+def _write_json_atomic(tmp_path: str, final_path: str, payload: dict[str, Any]) -> None:
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, sort_keys=True)
+        f.write("\n")
+    os.replace(tmp_path, final_path)
 
 
 class Coordinator:
@@ -68,6 +76,7 @@ class Coordinator:
         speculative_retry_backoff_base_s: float = 0.001,
         speculative_retry_backoff_max_s: float = 0.0,
         speculative_early_fallback: bool = True,
+        global_manifest_dir: str | None = None,
         on_snapshot_complete: Callable | None = None,
         metadata_registry: SnapshotMetadataRegistry | None = None,
     ):
@@ -98,6 +107,7 @@ class Coordinator:
             0.0, float(speculative_retry_backoff_max_s)
         )
         self.speculative_early_fallback = bool(speculative_early_fallback)
+        self.global_manifest_dir = global_manifest_dir
 
         self._on_snapshot_complete = on_snapshot_complete
         self._metadata_registry = metadata_registry
@@ -744,6 +754,42 @@ class Coordinator:
                 snapshot_ts=snapshot_ts,
                 failed_nodes=failed,
             )
+            return
+
+        await self._write_global_snapshot_manifest(snapshot_ts, participants, responses)
+
+    async def _write_global_snapshot_manifest(
+        self,
+        snapshot_ts: int,
+        participants: list[int],
+        responses: list[dict[str, Any] | None],
+    ) -> None:
+        if not self.global_manifest_dir:
+            return
+
+        node_manifests = [
+            response.get("manifest")
+            for response in responses
+            if response is not None and isinstance(response.get("manifest"), dict)
+        ]
+        if len(node_manifests) != len(participants):
+            return
+
+        manifest = {
+            "snapshot_ts": int(snapshot_ts),
+            "strategy": self._strategy_name(),
+            "participants": [int(node_id) for node_id in participants],
+            "expected_total": int(self.expected_total),
+            "nodes": sorted(node_manifests, key=lambda row: int(row["node_id"])),
+        }
+
+        os.makedirs(self.global_manifest_dir, exist_ok=True)
+        path = os.path.join(
+            self.global_manifest_dir,
+            f"global_snapshot_{snapshot_ts}.json",
+        )
+        tmp_path = f"{path}.tmp"
+        await asyncio.to_thread(_write_json_atomic, tmp_path, path, manifest)
 
     async def _cancel_task(self, task: asyncio.Task | None):
         if task and not task.done():

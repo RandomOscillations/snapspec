@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
+import os
 import tempfile
 import pytest
 import pytest_asyncio
@@ -316,6 +318,9 @@ class TestRecoveryIntegration:
                 total_blocks_per_node=16,
                 health_check_interval_s=9999,
                 status_interval_s=9999,
+                global_manifest_dir=tempfile.mkdtemp(
+                    prefix="snapspec_global_manifest_"
+                ),
             )
             coordinator.expected_total = total_tokens
             coordinator.transfer_amounts = {}
@@ -338,6 +343,23 @@ class TestRecoveryIntegration:
             assert result.recovery_verified is True
             assert result.recovery_conservation_holds is True
             assert result.recovery_balance_sum == total_tokens
+
+            manifest_files = [
+                name for name in os.listdir(coordinator.global_manifest_dir)
+                if name.startswith("global_snapshot_") and name.endswith(".json")
+            ]
+            assert len(manifest_files) == 1
+            with open(
+                os.path.join(coordinator.global_manifest_dir, manifest_files[0]),
+                "r",
+                encoding="utf-8",
+            ) as f:
+                manifest = json.load(f)
+            assert manifest["strategy"] == "pause_and_snap"
+            assert manifest["expected_total"] == total_tokens
+            assert manifest["participants"] == [0, 1, 2]
+            assert [node["node_id"] for node in manifest["nodes"]] == [0, 1, 2]
+            assert all(node["archive_checksum"] for node in manifest["nodes"])
 
             await coordinator.stop()
         finally:
@@ -722,6 +744,8 @@ class TestSnapshotRestoreVerification:
                 },
             )
             assert mark["type"] == MessageType.ACK.value
+            assert mark["manifest"]["archive_checksum"]
+            assert mark["manifest"]["archive_bytes"] == 0
 
             after = await conn.send_and_receive(
                 MessageType.GET_SNAPSHOT_MANIFESTS, 5
@@ -731,6 +755,8 @@ class TestSnapshotRestoreVerification:
             manifest = after["manifests"][0]
             assert manifest["snapshot_ts"] == 800
             assert manifest["node_id"] == 0
+            assert manifest["archive_checksum"] == mark["manifest"]["archive_checksum"]
+            assert manifest["archive_bytes"] == 0
             assert manifest["participants"] == [0, 1, 2]
             assert manifest["strategy"] == "speculative"
             assert manifest["expected_total"] == 100000
@@ -988,6 +1014,55 @@ class TestSnapshotRestoreVerification:
                 expected_total=2000,
             )
             assert await latest_global_committed_snapshot_ts(node_configs) == 900
+
+            for conn in conns:
+                await conn.close()
+        finally:
+            for node in nodes:
+                await node.stop()
+
+    @pytest.mark.asyncio
+    async def test_latest_global_snapshot_rejects_inconsistent_manifest(self):
+        nodes = [
+            await _start_node(
+                MockBlockStore(block_size=64, total_blocks=4),
+                node_id=node_id,
+                initial_balance=1000,
+            )
+            for node_id in (0, 1)
+        ]
+        try:
+            conns = [await _connect(node) for node in nodes]
+            for conn in conns:
+                await conn.send_and_receive(MessageType.SNAP_NOW, 1, snapshot_ts=901)
+                await conn.send_and_receive(MessageType.COMMIT, 2)
+
+            await conns[0].send_and_receive(
+                MessageType.MARK_SNAPSHOT_COMMITTED,
+                3,
+                snapshot_ts=901,
+                participants=[0, 1],
+                strategy="pause_and_snap",
+                expected_total=2000,
+                balance_sum=2000,
+                in_transit_total=0,
+            )
+            await conns[1].send_and_receive(
+                MessageType.MARK_SNAPSHOT_COMMITTED,
+                4,
+                snapshot_ts=901,
+                participants=[0, 1],
+                strategy="pause_and_snap",
+                expected_total=2000,
+                balance_sum=1999,
+                in_transit_total=0,
+            )
+
+            node_configs = [
+                {"node_id": node.node_id, "host": "127.0.0.1", "port": node.actual_port}
+                for node in nodes
+            ]
+            assert await latest_global_committed_snapshot_ts(node_configs) is None
 
             for conn in conns:
                 await conn.close()
