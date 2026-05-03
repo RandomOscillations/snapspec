@@ -20,6 +20,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from enum import Enum
 
+from ..transfer_state import debit_is_durable
+
 
 class ValidationResult(Enum):
     CONSISTENT = "consistent"
@@ -94,7 +96,10 @@ def validate_causal(
 
     for tag, pending in (pending_transfers or {}).items():
         tag = int(tag)
-        if int(pending.get("debit_ts", 0) or 0) <= 0:
+        if not debit_is_durable(
+            pending.get("transfer_state"),
+            int(pending.get("debit_ts", 0) or 0),
+        ):
             continue
         if participating_node_ids is not None:
             source_node_id = pending.get("source_node_id")

@@ -24,6 +24,11 @@ from ..logging_utils import log_event
 from ..metadata.outbox import PendingTransferOutbox, PendingTransferOutboxRow
 from ..network.connection import NodeConnection
 from ..network.protocol import MessageType
+from ..transfer_state import (
+    TransferState,
+    normalize_transfer_state,
+    source_pending_is_replayable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +60,7 @@ class PendingTransfer:
     debit_ts: int = 0
     attempts: int = 0
     next_retry_at: float = 0.0
-    state: str = "INTENT_CREATED"
+    state: str = TransferState.INTENT_CREATED.value
 
 
 class NodeWorkload:
@@ -168,11 +173,6 @@ class NodeWorkload:
         if self._running:
             return
 
-        if self._pending_outbox is not None:
-            await self._pending_outbox.start()
-            await self._pending_outbox.register_run(self._outbox_run_id)
-            await self._load_pending_effects_from_outbox()
-
         if self._local_conn is None:
             self._local_conn = NodeConnection(
                 node_id=self.node_id,
@@ -191,6 +191,11 @@ class NodeWorkload:
             )
             await self._connect_with_retry(conn)
             self._remote_conns[cfg["node_id"]] = conn
+
+        if self._pending_outbox is not None:
+            await self._pending_outbox.start()
+            await self._pending_outbox.register_run(self._outbox_run_id)
+            await self._load_pending_effects_from_outbox()
 
         self._running = True
         self._draining = False
@@ -409,7 +414,7 @@ class NodeWorkload:
                 data=data,
                 amount=amount,
                 debit_ts=0,
-                state="INTENT_CREATED",
+                state=TransferState.INTENT_CREATED.value,
             )
             self._pending_effects[dep_tag] = pending
             await self._persist_pending_effect(pending)
@@ -434,7 +439,7 @@ class NodeWorkload:
                 raise
 
             self._local_balance -= amount
-            pending.state = "DEBIT_APPLIED"
+            pending.state = TransferState.DEBIT_APPLIED.value
             await self._persist_pending_effect(pending)
 
             if self._effect_delay_s > 0:
@@ -471,7 +476,7 @@ class NodeWorkload:
 
         try:
             credit_ts = self.tick()
-            pending.state = "CREDIT_SENT"
+            pending.state = TransferState.CREDIT_SENT.value
             await self._persist_pending_effect(pending)
             await self._send_write_with_retry(
                 conn,
@@ -511,7 +516,7 @@ class NodeWorkload:
             return 0
 
         await self._mark_pending_effect_applied(pending)
-        pending.state = "ACK_OBSERVED"
+        pending.state = TransferState.ACK_OBSERVED.value
         self._pending_effects.pop(dep_tag, None)
         return 1
 
@@ -546,6 +551,35 @@ class NodeWorkload:
         balance_delta: int,
         write_id: str,
     ) -> int:
+        resp = await self._send_write_request_with_retry(
+            conn,
+            block_id,
+            data,
+            ts,
+            dep_tag=dep_tag,
+            role=role,
+            partner=partner,
+            balance_delta=balance_delta,
+            write_id=write_id,
+        )
+        return (
+            int(resp.get("write_timestamp", 0) or 0)
+            or int(resp.get("logical_timestamp", 0) or 0)
+            or ts
+        )
+
+    async def _send_write_request_with_retry(
+        self,
+        conn: NodeConnection | None,
+        block_id: int,
+        data: bytes,
+        ts: int,
+        dep_tag: int,
+        role: str,
+        partner: int,
+        balance_delta: int,
+        write_id: str,
+    ) -> dict:
         """Send a write, retrying on PAUSED_ERR."""
         if conn is None:
             raise ConnectionError("NodeWorkload connection is not initialized")
@@ -571,7 +605,6 @@ class NodeWorkload:
                 raise ConnectionError(f"Node {conn.node_id} closed connection")
 
             if resp.get("type") == MessageType.WRITE_ACK.value:
-                write_ts = resp.get("write_timestamp", 0)
                 remote_ts = resp.get("logical_timestamp", 0)
                 if remote_ts:
                     self._hlc.receive(remote_ts)
@@ -582,7 +615,7 @@ class NodeWorkload:
                 self._write_latency_max_ms = max(
                     self._write_latency_max_ms, latency_ms
                 )
-                return write_ts or remote_ts or ts
+                return resp
 
             if resp.get("type") == MessageType.PAUSED_ERR.value:
                 self._paused_retry_count += 1
@@ -618,7 +651,8 @@ class NodeWorkload:
         for row in rows:
             if row.source_node_id != self.node_id:
                 continue
-            if row.debit_ts <= 0:
+            state = normalize_transfer_state(row.transfer_state)
+            if not source_pending_is_replayable(state):
                 await self._discard_pending_effect(row.dep_tag)
                 continue
             pending = PendingTransfer(
@@ -630,8 +664,10 @@ class NodeWorkload:
                 amount=row.amount,
                 debit_ts=row.debit_ts,
                 attempts=row.attempts,
-                state=row.transfer_state,
+                state=state,
             )
+            if pending.debit_ts <= 0:
+                await self._apply_pending_debit_idempotently(pending)
             self._pending_effects[pending.dep_tag] = pending
             self._transfer_amounts[pending.dep_tag] = pending.amount
             self._dep_tag_counter = max(self._dep_tag_counter, pending.dep_tag)
@@ -646,6 +682,29 @@ class NodeWorkload:
                 pending_transfers=loaded,
                 dep_tags=sorted(self._pending_effects.keys())[:10],
             )
+
+    async def _apply_pending_debit_idempotently(self, pending: PendingTransfer):
+        resp = await self._send_write_request_with_retry(
+            self._local_conn,
+            pending.block_id,
+            pending.data,
+            self.tick(),
+            dep_tag=pending.dep_tag,
+            role="CAUSE",
+            partner=pending.dest,
+            balance_delta=-pending.amount,
+            write_id=_transfer_write_id(
+                pending.source, pending.dest, pending.dep_tag, "CAUSE"
+            ),
+        )
+        pending.debit_ts = (
+            int(resp.get("write_timestamp", 0) or 0)
+            or int(resp.get("logical_timestamp", 0) or 0)
+        )
+        if not resp.get("duplicate", False):
+            self._local_balance -= pending.amount
+        pending.state = TransferState.DEBIT_APPLIED.value
+        await self._persist_pending_effect(pending)
 
     async def _persist_pending_effect(self, pending: PendingTransfer):
         if self._pending_outbox is None:

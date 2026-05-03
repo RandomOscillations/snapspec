@@ -17,6 +17,8 @@ but catches additional failure modes (lost writes, double-applies, etc.).
 from collections import defaultdict
 from dataclasses import dataclass
 
+from ..transfer_state import debit_is_durable
+
 
 @dataclass
 class ConservationResult:
@@ -106,7 +108,10 @@ def validate_conservation(
 
     for tag, pending in (pending_transfers or {}).items():
         tag = int(tag)
-        if int(pending.get("debit_ts", 0) or 0) <= 0:
+        if not debit_is_durable(
+            pending.get("transfer_state"),
+            int(pending.get("debit_ts", 0) or 0),
+        ):
             continue
         source_node_id = pending.get("source_node_id")
         dest_node_id = pending.get("dest_node_id")

@@ -7,6 +7,8 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
+from ..transfer_state import TransferState, normalize_transfer_state
+
 
 @dataclass
 class PendingTransferOutboxRow:
@@ -19,7 +21,7 @@ class PendingTransferOutboxRow:
     amount: int
     debit_ts: int = 0
     attempts: int = 0
-    transfer_state: str = "INTENT_CREATED"
+    transfer_state: str = TransferState.INTENT_CREATED.value
 
 
 class PendingTransferOutbox:
@@ -272,10 +274,12 @@ class PendingTransferOutbox:
         self._sqlite_conn.execute(
             f"""
             UPDATE {self._table_name}
-            SET status = 'APPLIED', updated_at = CURRENT_TIMESTAMP
+            SET status = 'APPLIED',
+                transfer_state = ?,
+                updated_at = CURRENT_TIMESTAMP
             WHERE run_id = ? AND dep_tag = ?
             """,
-            (run_id, dep_tag),
+            (TransferState.ACK_OBSERVED.value, run_id, dep_tag),
         )
         self._sqlite_conn.commit()
 
@@ -285,10 +289,12 @@ class PendingTransferOutbox:
         self._sqlite_conn.execute(
             f"""
             UPDATE {self._table_name}
-            SET status = 'DISCARDED', updated_at = CURRENT_TIMESTAMP
+            SET status = 'DISCARDED',
+                transfer_state = ?,
+                updated_at = CURRENT_TIMESTAMP
             WHERE run_id = ? AND dep_tag = ? AND status = 'PENDING'
             """,
-            (run_id, dep_tag),
+            (TransferState.DISCARDED.value, run_id, dep_tag),
         )
         self._sqlite_conn.commit()
 
@@ -298,10 +304,12 @@ class PendingTransferOutbox:
         self._sqlite_conn.execute(
             f"""
             UPDATE {self._table_name}
-            SET status = 'DISCARDED', updated_at = CURRENT_TIMESTAMP
+            SET status = 'DISCARDED',
+                transfer_state = ?,
+                updated_at = CURRENT_TIMESTAMP
             WHERE run_id = ? AND status = 'PENDING'
             """,
-            (run_id,),
+            (TransferState.DISCARDED.value, run_id),
         )
         self._sqlite_conn.commit()
 
@@ -428,10 +436,11 @@ class PendingTransferOutbox:
                 await cur.execute(
                     f"""
                     UPDATE {self._table_name}
-                    SET status = 'APPLIED'
+                    SET status = 'APPLIED',
+                        transfer_state = %s
                     WHERE run_id = %s AND dep_tag = %s
                     """,
-                    (run_id, dep_tag),
+                    (TransferState.ACK_OBSERVED.value, run_id, dep_tag),
                 )
 
     async def _discard_pending_mysql(self, run_id: str, dep_tag: int):
@@ -442,10 +451,11 @@ class PendingTransferOutbox:
                 await cur.execute(
                     f"""
                     UPDATE {self._table_name}
-                    SET status = 'DISCARDED'
+                    SET status = 'DISCARDED',
+                        transfer_state = %s
                     WHERE run_id = %s AND dep_tag = %s AND status = 'PENDING'
                     """,
-                    (run_id, dep_tag),
+                    (TransferState.DISCARDED.value, run_id, dep_tag),
                 )
 
     async def _clear_pending_mysql(self, run_id: str):
@@ -456,10 +466,11 @@ class PendingTransferOutbox:
                 await cur.execute(
                     f"""
                     UPDATE {self._table_name}
-                    SET status = 'DISCARDED'
+                    SET status = 'DISCARDED',
+                        transfer_state = %s
                     WHERE run_id = %s AND status = 'PENDING'
                     """,
-                    (run_id,),
+                    (TransferState.DISCARDED.value, run_id),
                 )
 
     async def _register_run_mysql(self, run_id: str):
@@ -504,7 +515,7 @@ def _row_tuple(row: PendingTransferOutboxRow):
         row.amount,
         row.debit_ts,
         row.attempts,
-        row.transfer_state,
+        normalize_transfer_state(row.transfer_state),
     )
 
 
@@ -519,5 +530,7 @@ def _row_from_db(row) -> PendingTransferOutboxRow:
         amount=int(row[6]),
         debit_ts=int(row[7]),
         attempts=int(row[8]),
-        transfer_state=str(row[9]) if len(row) > 9 else "INTENT_CREATED",
+        transfer_state=normalize_transfer_state(
+            str(row[9]) if len(row) > 9 else TransferState.INTENT_CREATED.value
+        ),
     )

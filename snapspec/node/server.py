@@ -31,6 +31,7 @@ from typing import Any
 from ..hlc import HybridLogicalClock
 from ..logging_utils import log_event
 from ..network.protocol import MessageType, encode_message, read_message
+from ..transfer_state import TransferState
 
 logger = logging.getLogger(__name__)
 
@@ -40,16 +41,6 @@ class NodeState(str, Enum):
     PREPARED = "PREPARED"
     PAUSED = "PAUSED"
     SNAPPED = "SNAPPED"
-
-
-class TransferState(str, Enum):
-    INTENT_CREATED = "INTENT_CREATED"
-    DEBIT_APPLIED = "DEBIT_APPLIED"
-    CREDIT_SENT = "CREDIT_SENT"
-    CREDIT_APPLIED = "CREDIT_APPLIED"
-    ACK_OBSERVED = "ACK_OBSERVED"
-    ROLLED_BACK = "ROLLED_BACK"
-    DISCARDED = "DISCARDED"
 
 
 class MockBlockStore:
