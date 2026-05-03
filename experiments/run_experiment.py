@@ -321,6 +321,16 @@ async def run_single(config: dict, rep: int, output_dir: str) -> str:
             shutdown_timeout_s=float(config.get("shutdown_timeout_s", 30.0)),
             shutdown_nodes_on_stop=bool(config.get("shutdown_nodes_on_stop", False)),
             snapshot_transfer_policy=str(config.get("snapshot_transfer_policy", "drain")),
+            speculative_snap_stagger_s=float(config.get("speculative_snap_stagger_s", 0.0)),
+            speculative_retry_backoff_base_s=float(
+                config.get("speculative_retry_backoff_base_s", 0.001)
+            ),
+            speculative_retry_backoff_max_s=float(
+                config.get("speculative_retry_backoff_max_s", 0.0)
+            ),
+            speculative_early_fallback=bool(
+                config.get("speculative_early_fallback", True)
+            ),
             metadata_registry=build_metadata_registry(config, rep, output_dir),
         )
         coordinator.expected_total = total_tokens

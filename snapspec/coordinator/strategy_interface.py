@@ -60,6 +60,10 @@ class CoordinatorProtocol(Protocol):
     delta_size_threshold_frac: float
     total_blocks_per_node: int
     snapshot_transfer_policy: str
+    speculative_snap_stagger_s: float
+    speculative_retry_backoff_base_s: float
+    speculative_retry_backoff_max_s: float
+    speculative_early_fallback: bool
 
     # --- Accuracy validation ---
     expected_total: int                        # 0 means conservation check disabled

@@ -420,6 +420,25 @@ async def run_strategy(
             )
         ),
         snapshot_transfer_policy=str(exp_cfg.get("snapshot_transfer_policy", "drain")),
+        speculative_snap_stagger_s=float(
+            exp_cfg.get(
+                "speculative_snap_stagger_s",
+                float(exp_cfg.get("speculative_snap_stagger_ms", 0.0)) / 1000.0,
+            )
+        ),
+        speculative_retry_backoff_base_s=float(
+            exp_cfg.get(
+                "speculative_retry_backoff_base_s",
+                float(exp_cfg.get("speculative_retry_backoff_ms", 1.0)) / 1000.0,
+            )
+        ),
+        speculative_retry_backoff_max_s=float(
+            exp_cfg.get(
+                "speculative_retry_backoff_max_s",
+                float(exp_cfg.get("speculative_retry_backoff_max_ms", 0.0)) / 1000.0,
+            )
+        ),
+        speculative_early_fallback=bool(exp_cfg.get("speculative_early_fallback", True)),
         health_check_interval_s=1.0,
         health_check_timeout_s=0.5,
         health_unhealthy_after_s=3.0,

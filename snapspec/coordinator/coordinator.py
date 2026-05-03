@@ -64,6 +64,10 @@ class Coordinator:
         delta_size_threshold_frac: float = 0.1,
         total_blocks_per_node: int = 4096,
         snapshot_transfer_policy: str = "drain",
+        speculative_snap_stagger_s: float = 0.0,
+        speculative_retry_backoff_base_s: float = 0.001,
+        speculative_retry_backoff_max_s: float = 0.0,
+        speculative_early_fallback: bool = True,
         on_snapshot_complete: Callable | None = None,
         metadata_registry: SnapshotMetadataRegistry | None = None,
     ):
@@ -86,6 +90,14 @@ class Coordinator:
         self.delta_size_threshold_frac = delta_size_threshold_frac
         self.total_blocks_per_node = total_blocks_per_node
         self.snapshot_transfer_policy = snapshot_transfer_policy
+        self.speculative_snap_stagger_s = max(0.0, float(speculative_snap_stagger_s))
+        self.speculative_retry_backoff_base_s = max(
+            0.0, float(speculative_retry_backoff_base_s)
+        )
+        self.speculative_retry_backoff_max_s = max(
+            0.0, float(speculative_retry_backoff_max_s)
+        )
+        self.speculative_early_fallback = bool(speculative_early_fallback)
 
         self._on_snapshot_complete = on_snapshot_complete
         self._metadata_registry = metadata_registry

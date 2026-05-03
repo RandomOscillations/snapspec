@@ -45,7 +45,7 @@ _SNAPPED = "SNAPPED"
 _COMMIT = "COMMIT"
 _ABORT = "ABORT"
 
-# Linear backoff base: 1ms per retry attempt
+# Default linear backoff base: 1ms per retry attempt
 _BACKOFF_BASE_S = 0.001
 
 
@@ -91,8 +91,10 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
 
         # Step 1: Snap all nodes — no pause, no prepare
         convergence_start = time.monotonic()
-        responses = await coordinator.send_all(
-            _SNAP_NOW, attempt_ts, node_ids=participant_node_ids, snapshot_ts=attempt_ts
+        responses = await _send_speculative_snapshots(
+            coordinator,
+            attempt_ts,
+            participant_node_ids,
         )
         convergence_ms = (time.monotonic() - convergence_start) * 1000
         if not all(r is not None and r.get("type") == _SNAPPED for r in responses):
@@ -101,7 +103,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             delta_blocks_at_discard.extend(_extract_delta_blocks(responses))
             coordinator.resume_workload()
             if attempt < max_retries:
-                await asyncio.sleep(_BACKOFF_BASE_S * (attempt + 1))
+                await _sleep_before_retry(coordinator, attempt)
             continue
 
         # Allow delayed post-snapshot effects to land before validation.
@@ -127,7 +129,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             delta_blocks_at_discard.extend(_extract_delta_blocks(abort_responses))
             coordinator.resume_workload()
             if attempt < max_retries:
-                await asyncio.sleep(_BACKOFF_BASE_S * (attempt + 1))
+                await _sleep_before_retry(coordinator, attempt)
             continue
 
         if len(responding_node_ids) < coordinator.minimum_snapshot_nodes():
@@ -137,7 +139,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
             delta_blocks_at_discard.extend(_extract_delta_blocks(abort_responses))
             coordinator.resume_workload()
             if attempt < max_retries:
-                await asyncio.sleep(_BACKOFF_BASE_S * (attempt + 1))
+                await _sleep_before_retry(coordinator, attempt)
             continue
 
         # Step 3: Validate causal consistency
@@ -192,7 +194,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                     delta_blocks_at_discard.extend(_extract_delta_blocks(abort_responses))
                     coordinator.resume_workload()
                     if attempt < max_retries:
-                        await asyncio.sleep(_BACKOFF_BASE_S * (attempt + 1))
+                        await _sleep_before_retry(coordinator, attempt)
                     continue
                 validation_ms = (time.monotonic() - validation_start) * 1000
 
@@ -214,7 +216,7 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
                 )
                 coordinator.resume_workload()
                 if attempt < max_retries:
-                    await asyncio.sleep(_BACKOFF_BASE_S * (attempt + 1))
+                    await _sleep_before_retry(coordinator, attempt)
                 continue
 
             # Verify restore — proves archive can restore exact snapshot state
@@ -279,12 +281,19 @@ async def execute(coordinator: CoordinatorProtocol, ts: int) -> SnapshotResult:
 
         # FM5: If delta is too large, skip remaining retries and fall back now
         # (delta_threshold is a fraction of total image blocks)
-        if _should_fallback_early(attempt_deltas, delta_threshold, coordinator.total_blocks_per_node):
+        if (
+            getattr(coordinator, "speculative_early_fallback", True)
+            and _should_fallback_early(
+                attempt_deltas,
+                delta_threshold,
+                coordinator.total_blocks_per_node,
+            )
+        ):
             break
 
         # Linear backoff before next retry
         if attempt < max_retries:
-            await asyncio.sleep(_BACKOFF_BASE_S * (attempt + 1))
+            await _sleep_before_retry(coordinator, attempt)
 
     # All retries exhausted (or early fallback) — guaranteed progress via two-phase
     from .two_phase import execute as two_phase_execute
@@ -333,6 +342,35 @@ def _extract_archive_paths(responses: list[dict | None]) -> list[str]:
     ]
 
 
+async def _send_speculative_snapshots(
+    coordinator: CoordinatorProtocol,
+    attempt_ts: int,
+    participant_node_ids: list[int],
+) -> list[dict]:
+    stagger_s = float(getattr(coordinator, "speculative_snap_stagger_s", 0.0) or 0.0)
+    if stagger_s <= 0:
+        return await coordinator.send_all(
+            _SNAP_NOW,
+            attempt_ts,
+            node_ids=participant_node_ids,
+            snapshot_ts=attempt_ts,
+        )
+
+    responses: list[dict] = []
+    for idx, node_id in enumerate(participant_node_ids):
+        responses.extend(
+            await coordinator.send_all(
+                _SNAP_NOW,
+                attempt_ts,
+                node_ids=[node_id],
+                snapshot_ts=attempt_ts,
+            )
+        )
+        if idx < len(participant_node_ids) - 1:
+            await asyncio.sleep(stagger_s)
+    return responses
+
+
 def _log_stats(all_logs: list[list[dict]]) -> tuple[int, int, int]:
     entries = [entry for node_log in all_logs for entry in node_log]
     tags = {
@@ -341,6 +379,27 @@ def _log_stats(all_logs: list[list[dict]]) -> tuple[int, int, int]:
         if int(entry.get("dependency_tag", 0) or 0) > 0
     }
     return len(entries), len(json.dumps(entries, default=str)), len(tags)
+
+
+async def _sleep_before_retry(
+    coordinator: CoordinatorProtocol,
+    attempt: int,
+) -> None:
+    delay_s = _retry_backoff_s(coordinator, attempt)
+    if delay_s > 0:
+        await asyncio.sleep(delay_s)
+
+
+def _retry_backoff_s(coordinator: CoordinatorProtocol, attempt: int) -> float:
+    base_s = float(
+        getattr(coordinator, "speculative_retry_backoff_base_s", _BACKOFF_BASE_S)
+        or 0.0
+    )
+    delay_s = max(0.0, base_s) * (attempt + 1)
+    max_s = float(getattr(coordinator, "speculative_retry_backoff_max_s", 0.0) or 0.0)
+    if max_s > 0:
+        delay_s = min(delay_s, max_s)
+    return delay_s
 
 
 def _should_fallback_early(

@@ -220,6 +220,14 @@ async def run_one(strategy_name: str, node_configs: list[dict], cfg: dict) -> tu
         shutdown_timeout_s=float(cfg.get("shutdown_timeout_s", 30.0)),
         shutdown_nodes_on_stop=bool(cfg.get("shutdown_nodes_on_stop", False)),
         snapshot_transfer_policy=str(cfg.get("snapshot_transfer_policy", "drain")),
+        speculative_snap_stagger_s=float(cfg.get("speculative_snap_stagger_s", 0.0)),
+        speculative_retry_backoff_base_s=float(
+            cfg.get("speculative_retry_backoff_base_s", 0.001)
+        ),
+        speculative_retry_backoff_max_s=float(
+            cfg.get("speculative_retry_backoff_max_s", 0.0)
+        ),
+        speculative_early_fallback=bool(cfg.get("speculative_early_fallback", True)),
         metadata_registry=build_metadata_registry(cfg, strategy_name),
     )
     await coordinator.start()

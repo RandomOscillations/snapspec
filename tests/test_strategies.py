@@ -21,6 +21,10 @@ class MockCoordinator:
     validation_timeout_s: float = 1.0
     validation_grace_s: float = 0.0
     snapshot_transfer_policy: str = "drain"
+    speculative_snap_stagger_s: float = 0.0
+    speculative_retry_backoff_base_s: float = 0.001
+    speculative_retry_backoff_max_s: float = 0.0
+    speculative_early_fallback: bool = True
     delta_size_threshold_frac: float = 0.10
     total_blocks_per_node: int = 4096
     expected_total: int = 0
@@ -306,6 +310,17 @@ class TestSpeculative:
         assert not coord.was_called("DRAIN_WORKLOAD")
 
     @pytest.mark.asyncio
+    async def test_speculative_snap_stagger_sends_one_node_at_a_time(self, coord):
+        from snapspec.coordinator.speculative import execute
+        coord.snapshot_transfer_policy = "speculate"
+        coord.speculative_snap_stagger_s = 0.001
+
+        result = await execute(coord, ts=1)
+
+        assert result.success
+        assert coord.call_count("SNAP_NOW") == 2
+
+    @pytest.mark.asyncio
     async def test_delta_blocks_tracked(self, coord):
         from snapspec.coordinator.speculative import execute
 
@@ -323,3 +338,12 @@ class TestSpeculative:
         assert result.success
         assert result.delta_blocks_at_discard is not None
         assert len(result.delta_blocks_at_discard) > 0
+
+    def test_speculative_retry_backoff_can_be_capped(self, coord):
+        from snapspec.coordinator.speculative import _retry_backoff_s
+
+        coord.speculative_retry_backoff_base_s = 0.1
+        coord.speculative_retry_backoff_max_s = 0.25
+
+        assert _retry_backoff_s(coord, attempt=0) == pytest.approx(0.1)
+        assert _retry_backoff_s(coord, attempt=2) == pytest.approx(0.25)
