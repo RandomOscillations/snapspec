@@ -1,7 +1,5 @@
 # SnapSpec
 
-Author: Adithya Srinivasan
-
 SnapSpec is a distributed snapshot research prototype. The project asks how cheap
 local snapshots, especially Redirect-on-Write snapshots, affect distributed
 checkpoint coordination. The codebase contains storage backends, storage nodes,
