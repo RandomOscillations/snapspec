@@ -21,3 +21,15 @@ Author: Adithya Srinivasan
 
 The node serializes snapshot and write operations with an asyncio lock to avoid
 write/snapshot races.
+
+Author: Niharika Maruvanahalli Suresh
+
+### Crash Recovery
+
+Added node-side restore and cleanup support needed for coordinated recovery from committed snapshots.
+
+- Nodes can prepare, commit, or abort restore operations as part of a coordinator-driven restore protocol instead of relying on isolated local resets.
+- Restore logic reloads archived local state at a committed snapshot boundary
+  and keeps writes paused until the coordinator resumes normal execution.
+- Shutdown cleanup discards transient snapshot state when needed so node
+  termination does not leave abandoned in-memory snapshot state behind.
